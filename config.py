@@ -1,124 +1,103 @@
-"""OW-Light-Translator 配置模块：DTO 定义与环境变量加载。"""
+"""项目全局配置与基础 DTO 定义。"""
 
 from __future__ import annotations
 
 import os
-import re
-from dataclasses import dataclass, field
-from typing import Optional
+from dataclasses import dataclass
+from typing import Dict, List, Optional
 
 from dotenv import load_dotenv
 
+try:
+    from local_api_keys import DEEPSEEK_API_KEY as FILE_DEEPSEEK_API_KEY
+    from local_api_keys import GLM_API_KEY as FILE_GLM_API_KEY
+except ImportError:
+    FILE_DEEPSEEK_API_KEY = ""
+    FILE_GLM_API_KEY = ""
+
 load_dotenv()
 
-# ---------------------------------------------------------------------------
-# API 端点与模型
-# ---------------------------------------------------------------------------
+# API 与模型配置（后续 `api_client.py` 直接复用）
 GLM_OCR_URL: str = os.getenv(
     "GLM_OCR_URL", "https://open.bigmodel.cn/api/paas/v4/chat/completions"
 )
 GLM_OCR_MODEL: str = os.getenv("GLM_OCR_MODEL", "glm-ocr")
+GLM_API_KEY: str = (FILE_GLM_API_KEY or os.getenv("GLM_API_KEY", "")).strip()
 
 DEEPSEEK_URL: str = os.getenv(
     "DEEPSEEK_URL", "https://api.deepseek.com/chat/completions"
 )
 DEEPSEEK_MODEL: str = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
+DEEPSEEK_API_KEY: str = (FILE_DEEPSEEK_API_KEY or os.getenv("DEEPSEEK_API_KEY", "")).strip()
 
-GLM_API_KEY: str = os.getenv("GLM_API_KEY", "")
-DEEPSEEK_API_KEY: str = os.getenv("DEEPSEEK_API_KEY", "")
-
-# ---------------------------------------------------------------------------
-# 热键与 UI
-# ---------------------------------------------------------------------------
-HOTKEY_CAPTURE: str = os.getenv("HOTKEY_CAPTURE", "f8")
-HOTKEY_TOGGLE_LOCK: str = os.getenv("HOTKEY_TOGGLE_LOCK", "f9")
-
-OVERLAY_OPACITY: float = float(os.getenv("OVERLAY_OPACITY", "0.92"))
-FONT_FAMILY: str = os.getenv("FONT_FAMILY", "Microsoft YaHei UI")
-FONT_SIZE: int = int(os.getenv("FONT_SIZE", "14"))
-
-# ---------------------------------------------------------------------------
-# 本地英文过滤（纯 ASCII 字母/数字/标点则跳过翻译）
-# ---------------------------------------------------------------------------
-ENGLISH_ONLY_PATTERN: re.Pattern[str] = re.compile(
-    r"^[\x00-\x7F\s]*$"  # 仅 ASCII 可打印字符与空白
-)
-
-HTTP_TIMEOUT_SEC: float = float(os.getenv("HTTP_TIMEOUT_SEC", "30.0"))
-MAX_RETRIES: int = int(os.getenv("MAX_RETRIES", "2"))
+HTTP_TIMEOUT_SEC: float = float(os.getenv("HTTP_TIMEOUT_SEC", "30"))
 
 
 @dataclass(frozen=True, slots=True)
 class CaptureData:
-    """屏幕截图内存数据（Base64，零磁盘 I/O）。"""
+    """捕获截图及元数据。"""
 
-    base64_png: str
+    image_base64: str
     width: int
     height: int
-    region: tuple[int, int, int, int]  # left, top, width, height
-    captured_at: float  # time.monotonic() 时间戳
+
+
+@dataclass(frozen=True, slots=True)
+class ColorTag:
+    """语义颜色标签与对应 RGB 掩码范围。"""
+
+    label: str  # 'Enemy', 'Friendly', 'Group', 'Alert'
+    hex_color: str  # 用于 UI 渲染，例如 '#FF0000'
+    rgb_min: tuple[int, int, int]  # 例如 (100, 0, 0)
+    rgb_max: tuple[int, int, int]  # 例如 (255, 100, 100)
 
 
 @dataclass(frozen=True, slots=True)
 class OCRResult:
-    """GLM-OCR 识别结果。"""
+    """OCR 文本块与其原始语义颜色。"""
 
     raw_text: str
-    skipped: bool = False  # True 表示本地过滤后未调用翻译
-    skip_reason: Optional[str] = None
-    latency_ms: float = 0.0
-    error: Optional[str] = None
-
-    @property
-    def is_success(self) -> bool:
-        return self.error is None and bool(self.raw_text.strip())
-
-    def should_translate(self) -> bool:
-        """纯英文/数字/标点则无需翻译。"""
-        text = self.raw_text.strip()
-        if not text:
-            return False
-        return not ENGLISH_ONLY_PATTERN.fullmatch(text)
+    is_valid: bool
+    color_tag: Optional[ColorTag] = None
+    error_msg: Optional[str] = None
 
 
 @dataclass(frozen=True, slots=True)
 class TransResult:
-    """DeepSeek 翻译结果。"""
+    """翻译结果：保留来源文本和颜色语义。"""
 
     source_text: str
-    translated_text: str
-    latency_ms: float = 0.0
-    error: Optional[str] = None
-
-    @property
-    def is_success(self) -> bool:
-        return self.error is None and bool(self.translated_text.strip())
+    translated: str
+    color_tag: Optional[ColorTag] = None
+    status_code: int = 200  # 200: 成功
 
 
-@dataclass
-class AppConfig:
-    """运行时配置聚合（便于依赖注入与测试）。"""
+COLOR_PALETTE: List[ColorTag] = [
+    ColorTag(
+        label="Enemy",
+        hex_color="#FF4C4C",
+        rgb_min=(150, 0, 0),
+        rgb_max=(255, 100, 100),
+    ),
+    ColorTag(
+        label="Friendly",
+        hex_color="#4CBFFF",
+        rgb_min=(0, 100, 150),
+        rgb_max=(100, 200, 255),
+    ),
+    ColorTag(
+        label="Group",
+        hex_color="#4CFF4C",
+        rgb_min=(0, 150, 0),
+        rgb_max=(100, 255, 100),
+    ),
+    ColorTag(
+        label="Alert",
+        hex_color="#FF8000",
+        rgb_min=(150, 100, 0),
+        rgb_max=(255, 200, 100),
+    ),
+]
 
-    glm_api_key: str = field(default_factory=lambda: GLM_API_KEY)
-    deepseek_api_key: str = field(default_factory=lambda: DEEPSEEK_API_KEY)
-    glm_ocr_url: str = field(default_factory=lambda: GLM_OCR_URL)
-    glm_ocr_model: str = field(default_factory=lambda: GLM_OCR_MODEL)
-    deepseek_url: str = field(default_factory=lambda: DEEPSEEK_URL)
-    deepseek_model: str = field(default_factory=lambda: DEEPSEEK_MODEL)
-    hotkey_capture: str = field(default_factory=lambda: HOTKEY_CAPTURE)
-    hotkey_toggle_lock: str = field(default_factory=lambda: HOTKEY_TOGGLE_LOCK)
-    http_timeout_sec: float = field(default_factory=lambda: HTTP_TIMEOUT_SEC)
-    max_retries: int = field(default_factory=lambda: MAX_RETRIES)
-
-    def validate(self) -> list[str]:
-        """返回缺失配置的警告列表。"""
-        warnings: list[str] = []
-        if not self.glm_api_key:
-            warnings.append("GLM_API_KEY 未设置，OCR 将不可用。")
-        if not self.deepseek_api_key:
-            warnings.append("DEEPSEEK_API_KEY 未设置，翻译将不可用。")
-        return warnings
-
-
-def get_app_config() -> AppConfig:
-    return AppConfig()
+# 便于按 label O(1) 查找颜色标签
+COLOR_TAG_MAP: Dict[str, ColorTag] = {tag.label: tag for tag in COLOR_PALETTE}

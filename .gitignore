@@ -5,6 +5,7 @@ __pycache__/
 .venv/
 venv/
 .env
+local_api_keys.py
 
 # IDE
 .vscode/

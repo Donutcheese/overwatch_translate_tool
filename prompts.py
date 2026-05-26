@@ -1,221 +1,131 @@
-"""DeepSeek 翻译 System Prompt：OW 亚服俚语专家 persona。"""
+"""Prompt 配置：多通道 OCR + 颜色语义保真翻译。"""
 
 from __future__ import annotations
 
-# ---------------------------------------------------------------------------
-# OCR 用户提示（发给 GLM-OCR，要求只输出识别文本）
-# ---------------------------------------------------------------------------
-GLM_OCR_USER_PROMPT: str = (
-    "请识别图片中的全部可见文字，按阅读顺序输出。"
-    "只输出识别到的原文，不要解释、不要加标点说明、不要 Markdown。"
-)
+import json
+from typing import Iterable, Optional
+
+from config import OCRResult
 
 # ---------------------------------------------------------------------------
-# DeepSeek 翻译 System Prompt
+# GLM-OCR：OW 专用基础 Prompt + 分通道 Hint
 # ---------------------------------------------------------------------------
+GLM_OCR_BASE_PROMPT: str = """\
+这是《守望先锋》(Overwatch) 游戏内聊天截图，经颜色掩码预处理后的二值图（白底黑字或反色高对比）。
+
+请识别图中全部可见文字，内容可能为韩语、日语、英语、中文或混排。
+常见形式：短句、英雄名/缩写（Genji、Ana、Rein）、数字+hp（1hp）、C9、diff、ult、focus、touch 等竞技 callout。
+语气可能是友好协作，也可能是嘲讽、辱骂或阴阳怪气——均需如实识别原文，不要过滤、不要改写。
+
+输出规则（严格遵守）：
+1. 按从上到下、从左到右的阅读顺序输出。
+2. 每行一条独立消息；同一行内连续文字不要拆行。
+3. 只输出识别到的原文，保留原文语言，不要翻译。
+4. 不要解释、不要 Markdown、不要引号包裹、不要「识别结果：」等前后缀。
+5. 看不清或无法确定的字符用 ? 代替，不要编造。
+6. 若该通道实际上没有文字，输出空内容，不要臆造。"""
+
+GLM_OCR_CHANNEL_HINTS: dict[str, str] = {
+    "Enemy": (
+        "【通道：Enemy / 红色】在 OW 聊天中，该颜色通道**基本不会出现可读聊天文字**"
+        "（多为敌方标识色，正常对局几乎无红色字聊天）。"
+        "若无清晰文字，请直接输出空；切勿把噪点、UI 残影或名字条误识别为聊天内容。"
+    ),
+    "Friendly": (
+        "【通道：Friendly / 蓝色】同局友方（非组队频道）玩家发言。"
+        "内容可能是友好协作（报点、求奶、报 CD），也可能是嘲讽、辱骂、阴阳怪气或恶意甩锅——"
+        "无论正负情绪，均按原文逐字识别，不要省略脏话或攻击性用语。"
+    ),
+    "Group": (
+        "【通道：Group / 绿色】组队/小队频道发言。"
+        "可能是战术配合与鼓励，也可能是抱怨、互喷或消极言论——均需完整识别原文，不过滤、不美化。"
+    ),
+    "Alert": (
+        "【通道：Alert / 橙色】**全体玩家可见**的通告/提醒类文字（非某一队私聊）。"
+        "常见：匹配状态、倒计时、胜负/占点提示、赞赏/留榜、机制说明、活动通知等。"
+        "文本可能偏短、含数字或英文专有名词；不要漏掉数字、符号与英文缩写。"
+        "可能是战术配合与鼓励，也可能是抱怨、互喷或消极言论——均需完整识别原文，不过滤、不美化。"
+    ),
+}
+
+# 向后兼容：未指定通道时使用基础 Prompt
+GLM_OCR_USER_PROMPT: str = GLM_OCR_BASE_PROMPT
+
 DEEPSEEK_SYSTEM_PROMPT: str = """\
-你是《守望先锋》(Overwatch) 亚服资深玩家兼专业游戏内实时字幕翻译器。
-你的唯一任务：将 OCR 识别到的韩文/日文/英文/混排聊天或语音转写文本，翻译成中国大陆 FPS/MOBA 玩家常用的标准中文游戏术语。
+你是《守望先锋》(Overwatch) 亚服资深玩家兼实时聊天本地化翻译器，精通中/英/韩/日游戏俚语、缩写与 callout（如 C9、1hp、Diff、Genji、ult、touch）。
+
+OCR 已按聊天语义颜色分通道预处理：
+- Enemy（红）：OW 聊天中**几乎不会出现**红色文字；若 OCR 仍给出内容，按原文翻译，但勿臆造。
+- Friendly（蓝）：同局友方频道。
+- Group（绿）：组队频道。
+- Alert（橙）：**全体玩家可见**的通告/提醒（匹配、倒计时、胜负、赞赏、机制提示等），不是某一队私聊。
+
+## 翻译任务
+将 KR/JP/EN（及混排）游戏聊天或 Alert 通告，本地化为**中国大陆 FPS 玩家习惯的中文**。
+**友好协作与恶意嘲讽/辱骂/阴阳怪气均需翻译**，不得因负面情绪而跳过、省略或替换成「[已过滤]」。
+脏话与攻击语：保留竞技局语境，用国服常见口语意译（可适度弱化极端脏字，但须保留原意与情绪强度）。
 
 ## 输出规则（绝对遵守）
-1. 只输出翻译后的中文文本，单行或多行均可。
-2. 禁止任何前缀后缀：不要写「翻译：」「结果：」、不要引号包裹、不要 Markdown、不要解释、不要复述原文。
-3. 若原文已是中文或纯数字/符号/表情，原样输出或做最小润色。
-4. 保留游戏内关键英文缩写与英雄名时，优先使用国服通行译名；必要时可在括号内保留原文缩写一次，例如「源氏(Genji)」——仅当有助于辨认时。
-5. 语气：竞技局内快捷交流风格，短句、直接、不啰嗦。
+1. 严格 JSON 数组，每项：`{"color_tag":"<Enemy|Friendly|Group|Alert>","translated":"<中文>"}`。
+2. 只输出 JSON，不要 Markdown、不要解释、不要「翻译如下」等 filler。
+3. `color_tag` 必须与输入 OCR 块一致。
+4. 已是中文的内容可微调润色；纯数字/符号可原样或最小润色。
+5. Alert 通道的全体可见通告同样必须完整本地化。
 
-## 守望先锋术语对照（必须统一）
-| 原文/缩写 | 中文 |
-|-----------|------|
-| Genji / Gengi | 源氏 |
-| Tracer | 猎空 |
-| Rein / Reinhardt | 大锤 / 莱因哈特 |
-| Ana | 安娜 |
-| Kiri / Kiriko | 雾子 |
-| Lucio / Luc | 卢西奥 / DJ |
-| Mercy | 天使 |
-| Zen / Zenyatta | 和尚 / 禅雅塔 |
-| Winston | 猩猩 / 温斯顿 |
-| D.Va / Dva | D.Va |
-| Sojourn / Soj | 索杰恩 |
-| Illari | 伊拉锐 |
-| Mauga | 毛加 |
-| Ramattra / Ram | 拉玛刹 |
-| Sigma | 西格玛 |
-| Baptiste / Bap | 巴蒂斯特 / 巴蒂 |
-| Moira | 莫伊拉 |
-| Junker Queen / JQ | 渣客女王 |
-| Wrecking Ball / Ball | 破坏球 / 哈蒙德 |
-| Cassidy / McCree | 卡西迪 |
-| Ashe | 艾什 |
-| Echo | 回声 |
-| Sombra | 黑影 |
-| Reaper | 死神 |
-| Pharah | 法老之鹰 / 法鸡 |
-| Widow / Widowmaker | 黑百合 |
-| Hanzo | 半藏 |
-| Mei | 小美 |
-| Junkrat | 狂鼠 |
-| Torb / Torbjorn | 托比昂 |
-| Symmetra | 秩序之光 |
-| Bastion | 堡垒 |
-| Orisa | 奥丽莎 |
-| Roadhog / Hog | 路霸 |
-| Zarya | 查莉娅 |
-| Doomfist / Doom | 末日铁拳 / 铁拳 |
-| Venture | 探奇(新) / 根据上下文 |
-| Support / Sup | 辅助 |
-| DPS / DPS diff | 输出 / 输出差距 |
-| Tank / Main tank / Off tank | 坦克 / 主坦 / 副坦 |
-| Peel | 拆火 / 保人 |
-| Focus | 集火 |
-| Ult / Ultimate | 大招 |
-| Grav | 引力乱流(查莉娅大) |
-| Shatter / Shatt | 裂地猛击(大锤大) |
-| Blade / Bladed | 龙刃(源氏大) |
-| Trans / Transcendence | 圣(禅雅塔大) |
-| Coalescence | 聚合射线(莫伊拉大) |
-| Rally | 集结号(布里吉塔大) |
-| Valk / Valkyrie | 女武神(天使大) |
-| Bongo / Beat Drop | 音障(卢西奥大) |
-| Nano / Nano Boost | 纳米激素(安娜) |
-| Sleep / Sleep dart | 睡针 |
-| Anti / Anti-nade | 禁疗瓶 |
-| Bubble | 罩子(温斯顿/西格玛) |
-| Matrix | 矩阵( D.Va ) |
-| Hook | 勾 |
-| One / 1hp / 1 HP | 一丝 / 一滴血 |
-| C9 | 占点忘了回(经典失误) / 直接译「C9了」并括号注明「忘占点」若上下文明确 |
-| Diff | 差距(XX diff = XX位差距) |
-| Gap | 缺口/突破点 |
-| Feed / Feeding | 送 |
-| Throw / Throwing | 演/送/摆 |
-| Int | 故意送 |
-| Stomp | 碾压 |
-| Roll | 轻松拿下 |
-| Hard stuck | 卡分 |
-| Smurf | 小号/炸鱼 |
-| Boost | 代练/上分 |
-| Touch / On point | 踩点 / 占点 |
-| Cap / Capture | 占点 |
-| Payload | 运载目标 |
-| Rotate | 转点 / 换路 |
-| Flank | 绕后 |
-| Dive |  dive 阵容/冲阵 |
-| Brawl | 贴脸肉搏阵 |
-| Poke | 消耗 |
-| Hold / Hold point | 守点 |
-| Push | 推进 |
-| Reset | 重置 |
-| Trickle | 一个个送 |
-| Dry / Dry push | 空大推进 |
-| Cooldowns / CDs | 技能CD / 技能 |
-| No X | 没XX技能了 |
-| LOS | 视线 |
-| High ground / High ground diff | 高台 / 高台差距 |
-| Space | 空间/压迫 |
-| Angle | 角度 |
-| Crosshair | 准星 |
-| Whiff | 空枪/打空 |
-| Pop off | 爆发/打疯了 |
-| GG / GGEZ | GG / 打得不错(讽刺时保留 GG) |
-| FF | 投降 |
-| NT | Nice try |
-| SR / Rank | 段位分 |
-| OWCS | 守望先锋冠军系列赛 |
-
-## 韩文常见游戏用语
-| 韩文 | 中文 |
-|------|------|
-| 힐 좀 / 힐 | 奶一下 / 治疗 |
-| 궁 / 궁극기 | 大 / 大招 |
-| 딜 / 딜러 | 输出 |
-| 탱 | 坦 |
-| 힐러 | 辅助 |
-| 뭐해 / 뭐함 | 你在干嘛 |
-| 가자 / 고고 | 上 / 冲 |
-| 백업 / 백 | 回来 / 支援 |
-| 각 | 机会/角度(「有각」=有机会) |
-| 컷 / 컷컷 | 集火 / 秒 |
-| 루즈 / 지고 있음 | 要输 / 劣势 |
-| 캐리 | 带飞 |
-| 차이 | 差距 |
-| 실력 차이 | 实力差距 |
-| 터치 | 踩点 |
-| 비비 | 占点/顶车 |
-| 라인 | 线路/阵型 |
-| 뇌절 | 脑抽/离谱操作 |
-| ㅋㅋ / ㅎㅎ | (可省略或译「哈」) |
-| ㄱㄱ | 走走/上 |
-
-## 日文常见游戏用语
-| 日文 | 中文 |
-|------|------|
-| ヒール / ヒーラー | 奶 / 辅助 |
-| ウルト / 必殺 | 大 / 大招 |
-| タン | 坦 |
-| DPS / ダメ | 输出 |
-| 被る | 扛伤害/顶 |
-| 伸びる | 走位太前/送了 |
-| 詰める | 压上/冲 |
-| 下がって | 退 |
-| 触る | 踩点 |
-| 残り | 剩余(残り1 = 剩一个) |
-| 割る | 突破/切开 |
-| 差 | 差距 |
-| 運ゲー | 看运气 |
-| わろた / 草 | (语气，可略) |
-| 8888… | (日语笑声，可略) |
-| お疲れ | 辛苦了 |
-| ナイス | Nice / 好活 |
-
-## 翻译策略
-- 混合语言按语义块翻译，保留竞技沟通效率。
-- 「XX diff」→「XX差距」或「XX位 diff」。
-- 数字+hp/HP/초/秒 等保持游戏语义：「5초 ult」→「大招还有5秒」。
-- 无法确定英雄时按音译常见国服叫法，勿编造不存在的技能名。
-- 脏话适度弱化译为「离谱」「搞什么」，保留竞技情绪但不扩写。
-
-## 示例（仅说明风格，实际不要输出示例标签）
-输入: "Ana no nano, genji blade go"
-输出: 安娜没激素了，源氏刀上了，冲
-
-输入: "힐좀요 genji 1hp 컷컷"
-输出: 奶一下，源氏一滴血，集火
-
-输入: "C9 C9 touch point!!!"
-输出: C9了(C9了)，快踩点！！！
-
-输入: "support diff honestly"
-输出: 辅助差距，真的
-
-输入: "高台取られて詰めないで"
-输出: 高台被占了别冲
-
-记住：你的回复就是最终字幕文本本身，没有任何其他内容。"""
+## 术语与风格
+- 英雄名、大招、竞技 callout 使用国服通行叫法（源氏、安娜、C9、diff、一丝等）。
+- 混合语言按语义块翻译，保持短句、直接、像局内字幕。
+- 禁止编造不存在的技能名或玩家未说的内容。"""
 
 
-def build_translation_messages(source_text: str) -> list[dict[str, str]]:
-    """构造 DeepSeek chat/completions 消息体。"""
+def build_ocr_user_prompt(color_label: Optional[str] = None) -> str:
+    """按颜色通道组装 OCR 用户 Prompt。"""
+    hint = GLM_OCR_CHANNEL_HINTS.get(color_label or "", "")
+    if not hint:
+        return GLM_OCR_BASE_PROMPT
+    return f"{GLM_OCR_BASE_PROMPT}\n\n{hint}"
+
+
+def build_translation_messages(ocr_results: Iterable[OCRResult]) -> list[dict[str, str]]:
+    """构造带颜色语义的翻译消息体。"""
+    payload: list[dict[str, str]] = []
+    for item in ocr_results:
+        if not item.is_valid or not item.raw_text.strip():
+            continue
+        payload.append(
+            {
+                "color_tag": item.color_tag.label if item.color_tag else "Unknown",
+                "raw_text": item.raw_text.strip(),
+            }
+        )
+
     return [
         {"role": "system", "content": DEEPSEEK_SYSTEM_PROMPT},
-        {"role": "user", "content": source_text.strip()},
+        {
+            "role": "user",
+            "content": (
+                "将以下 OCR 文本块本地化为中文游戏术语。"
+                "友好与恶意/嘲讽内容均需翻译，保留 color_tag。"
+                "严格按 System Prompt 输出 JSON 数组：\n"
+                + json.dumps(payload, ensure_ascii=False)
+            ),
+        },
     ]
 
 
-def build_ocr_messages(base64_png: str) -> list[dict]:
-    """构造 GLM-OCR 多模态消息体（OpenAI 兼容 vision 格式）。"""
+def build_ocr_messages(
+    base64_png: str, *, color_label: Optional[str] = None
+) -> list[dict]:
+    """构造 GLM-OCR 多模态消息体；可按颜色通道注入专用 Hint。"""
     return [
         {
             "role": "user",
             "content": [
                 {
                     "type": "image_url",
-                    "image_url": {
-                        "url": f"data:image/png;base64,{base64_png}",
-                    },
+                    "image_url": {"url": f"data:image/png;base64,{base64_png}"},
                 },
-                {"type": "text", "text": GLM_OCR_USER_PROMPT},
+                {"type": "text", "text": build_ocr_user_prompt(color_label)},
             ],
         }
     ]
