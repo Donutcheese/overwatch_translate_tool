@@ -45,16 +45,11 @@
 
 ### 処理フロー
 
-```
-┌─────────────┐   色マスク    ┌──────────┐    原文     ┌──────────────┐
-│ mss 画面取得 │ ────────────► │ GLM-OCR  │ ──────────► │ DeepSeek 翻訳 │
-└─────────────┘   (メモリ)    └──────────┘             └──────┬───────┘
-                                                              │
-                                                              ▼
-                                                     ┌─────────────┐
-                                                     │ PyQt6 Overlay│
-                                                     └─────────────┘
-```
+<p align="center">
+  <img src="img/image.png" alt="OW-Light-Translator 詳細システムフロー図" width="900">
+</p>
+
+> 上図：全体データフロー — `mss` 領域キャプチャ（メモリ Base64）→ `COLOR_PALETTE` マルチチャネル色マスク → 智譜 GLM-OCR → DeepSeek 翻訳 → PyQt6 Overlay で意味色付き表示。
 
 ### プロジェクト構成
 
@@ -66,6 +61,7 @@ overwatch_translate_tool/
 ├── prompts.py         # OW スラング翻訳 System Prompt
 ├── local_api_keys.py  # ローカル API Key（gitignore 対象）
 ├── img/
+│   ├── image.png      # 詳細システムフロー図
 │   └── font_color.png # チャット色意味の参考図
 ├── requirements.txt
 ├── README.md

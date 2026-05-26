@@ -45,16 +45,11 @@ OCR currently relies on **default settings**: multi-channel masking based on fou
 
 ### Workflow
 
-```
-┌─────────────┐  color mask   ┌──────────┐   raw text   ┌──────────────┐
-│ mss capture │ ────────────► │ GLM-OCR  │ ───────────► │ DeepSeek LLM │
-└─────────────┘   (in RAM)    └──────────┘              └──────┬───────┘
-                                                               │
-                                                               ▼
-                                                      ┌─────────────┐
-                                                      │ PyQt6 Overlay│
-                                                      └─────────────┘
-```
+<p align="center">
+  <img src="img/image.png" alt="OW-Light-Translator detailed system flowchart" width="900">
+</p>
+
+> Above: full pipeline — `mss` region capture (in-memory Base64) → `COLOR_PALETTE` multi-channel masking → Zhipu GLM-OCR → DeepSeek localization → PyQt6 overlay with semantic color rendering.
 
 ### Project structure
 
@@ -66,6 +61,7 @@ overwatch_translate_tool/
 ├── prompts.py         # OW slang translation System Prompt
 ├── local_api_keys.py  # Local API keys (gitignored)
 ├── img/
+│   ├── image.png      # Detailed system flowchart
 │   └── font_color.png # Chat color semantics reference
 ├── requirements.txt
 ├── README.md

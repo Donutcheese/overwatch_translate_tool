@@ -45,16 +45,11 @@
 
 ### 工作流程
 
-```
-┌─────────────┐   颜色掩码    ┌──────────┐    原文     ┌──────────────┐
-│ mss 屏幕截图 │ ────────────► │ GLM-OCR  │ ──────────► │ DeepSeek 翻译 │
-└─────────────┘   (内存)      └──────────┘             └──────┬───────┘
-                                                              │
-                                                              ▼
-                                                     ┌─────────────┐
-                                                     │ PyQt6 Overlay│
-                                                     └─────────────┘
-```
+<p align="center">
+  <img src="img/image.png" alt="OW-Light-Translator 详细系统流程图" width="900">
+</p>
+
+> 上图：完整数据流——`mss` 区域截图（内存 Base64）→ 按 `COLOR_PALETTE` 多通道颜色掩码 → 智谱 GLM-OCR 识别 → DeepSeek 本地化翻译 → PyQt6 Overlay 按语义颜色渲染译文。
 
 ### 项目结构
 
@@ -66,6 +61,7 @@ overwatch_translate_tool/
 ├── prompts.py         # OW 俚语翻译 System Prompt
 ├── local_api_keys.py  # 本地 API Key（已 gitignore）
 ├── img/
+│   ├── image.png      # 详细系统流程图
 │   └── font_color.png # 聊天颜色语义参考图
 ├── requirements.txt
 ├── README.md
