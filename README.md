@@ -33,6 +33,11 @@
 
 > 上图：游戏内聊天文字颜色与语义标签对应关系。Enemy（红）、Friendly（蓝）、Group（绿）、Alert（橙）。
 
+#### TODO（OCR 与 UI）
+
+- [ ] **Qt 尺寸校准**：检查并调整 Overlay 默认尺寸、最小尺寸与拖拽缩放边界，确保与 OW 聊天框实际宽高比例更贴合。
+- [ ] **可配置聊天颜色**：当前默认使用固定 `COLOR_PALETTE`；需支持玩家自定义聊天颜色主题（例如通过配置文件切换/覆盖 RGB 范围）。
+
 ### 核心特性
 
 | 特性 | 说明 |
@@ -55,10 +60,21 @@
 
 ```
 overwatch_translate_tool/
-├── main.py            # PyQt6 主程序、热键、async 事件循环
-├── api_client.py      # GLM-OCR / DeepSeek 异步 HTTP 客户端
-├── config.py          # DTO 与环境变量
-├── prompts.py         # OW 俚语翻译 System Prompt
+├── main.py            # 启动入口（调用 ow_color_fluent.app.main）
+├── ow_color_fluent/   # 模块化主包
+│   ├── app.py         # Qt 应用装配与运行入口
+│   ├── core/
+│   │   ├── config.py  # DTO、颜色语义、环境变量
+│   │   └── prompts.py # OCR/翻译 Prompt 策略
+│   ├── services/
+│   │   └── api_client.py   # 多通道 OCR + 翻译客户端
+│   ├── ui/
+│   │   └── overlay_window.py # 悬浮窗 GUI 与交互逻辑
+│   └── runtime/
+│       └── async_runtime.py  # asyncio 后台循环线程
+├── api_client.py      # 兼容导出层（转发到 package）
+├── config.py          # 兼容导出层（转发到 package）
+├── prompts.py         # 兼容导出层（转发到 package）
 ├── local_api_keys.py  # 本地 API Key（已 gitignore）
 ├── img/
 │   ├── image.png      # 详细系统流程图
@@ -144,12 +160,41 @@ HTTP_TIMEOUT_SEC=30
 
 | 文件 | 职责 | 典型改动 |
 |------|------|----------|
-| `config.py` | DTO、`COLOR_PALETTE`、API 端点 | 调整聊天颜色掩码范围、超时时间 |
-| `prompts.py` | OCR/翻译 Prompt、消息体构造 | 补充 OW 俚语、优化翻译风格 |
-| `api_client.py` | 截图、颜色掩码、OCR/翻译 HTTP | 并发策略、错误重试、响应解析 |
-| `main.py` | PyQt6 UI、热键、async 事件循环 | Overlay 交互、渲染逻辑 |
+| `ow_color_fluent/core/config.py` | DTO、`COLOR_PALETTE`、API 端点 | 调整聊天颜色掩码范围、超时时间 |
+| `ow_color_fluent/core/prompts.py` | OCR/翻译 Prompt、消息体构造 | 补充 OW 俚语、优化翻译风格 |
+| `ow_color_fluent/services/api_client.py` | 截图、颜色掩码、OCR/翻译 HTTP | 并发策略、错误重试、响应解析 |
+| `ow_color_fluent/ui/overlay_window.py` | PyQt6 悬浮窗 GUI 与交互 | 拖拽缩放、锁定穿透、渲染逻辑 |
+| `ow_color_fluent/runtime/async_runtime.py` | 后台异步循环 | asyncio 与 UI 线程解耦 |
+| `ow_color_fluent/app.py` | 应用装配 | 启动流程、平台提示 |
+| `main.py` | 启动入口 | CLI 调起 GUI（通常无需改动） |
 | `local_api_keys.py` | 本地密钥 | 仅本机填写，勿提交 |
 | `img/font_color.png` | 颜色语义参考图 | 更新 OW 聊天配色对照 |
+
+#### 开发说明（针对上述 TODO）
+
+**1) Qt 尺寸校准（OW 聊天框适配）**
+
+- 主要改动文件：`ow_color_fluent/ui/overlay_window.py`
+- 建议改动点：
+  - 默认窗口尺寸与位置：`resize(...)`、`move(...)`
+  - 最小窗口约束：`setMinimumSize(...)`
+  - 拖拽/缩放边界：`_current_capture_region()`、`_is_on_resize_handle(...)`
+- 验收标准：
+  - 在 `16:9` 与 `21:9` 分辨率下，Overlay 能快速贴合聊天框区域
+  - 缩放到聊天框常见尺寸时，识别区域不截断末行文本
+  - 锁定/解锁后尺寸与位置不漂移
+
+**2) 聊天颜色可配置（非默认主题支持）**
+
+- 主要改动文件：`ow_color_fluent/core/config.py`、`local_api_keys.py`（或新增专用颜色配置文件）、`ow_color_fluent/services/api_client.py`
+- 建议实现方式：
+  - 方案 A（推荐）：新增 `color_palette.json`，启动时加载并覆盖默认 `COLOR_PALETTE`
+  - 方案 B：使用环境变量（如 `OW_COLOR_FRIENDLY_MIN=...`）覆盖默认值
+  - 保留默认兜底：当自定义配置缺失/格式错误时回退到内置默认值
+- 验收标准：
+  - 用户修改颜色配置后无需改代码即可生效
+  - 颜色范围配置错误时程序不崩溃，并提示回退默认值
+  - 在自定义颜色主题下，OCR 命中率不低于默认主题基线
 
 #### 参与开发流程
 
