@@ -7,6 +7,14 @@ venv/
 .env
 local_api_keys.py
 
+# Docker
+.dockerignore
+docker-compose.override.yml
+
+# Secrets (API keys)
+secrets/
+*.key
+
 # IDE
 .vscode/
 .idea/
@@ -15,3 +23,7 @@ local_api_keys.py
 # OS
 Thumbs.db
 Desktop.ini
+
+# Screenshots (if saving locally)
+screenshots/
+*.png
