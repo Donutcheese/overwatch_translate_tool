@@ -1,0 +1,59 @@
+FROM python:3.12-slim
+
+WORKDIR /app
+
+# Install system dependencies for PyQt6 GUI
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    # Qt6 dependencies
+    libgl1-mesa-glx \
+    libglib2.0-0 \
+    libsm6 \
+    libxext6 \
+    libxrender1 \
+    libxkbcommon-x11-0 \
+    libxcb-cursor0 \
+    libxcb-icccm4 \
+    libxcb-keysyms1 \
+    libxcb-shape0 \
+    libxcb-render-util0 \
+    libxcb-randr0 \
+    libxcb-image0 \
+    libxcb-fixies0 \
+    libgbm1 \
+    libasound2 \
+    libpulse0 \
+    # X11 for GUI
+    x11-apps \
+    x11-utils \
+    xvfb \
+    libnotify4 \
+    libnspr4 \
+    libnss3 \
+    libpango-1.0-0 \
+    libcairo2 \
+    libgomp1 \
+    # For keyboard hooks (if supported)
+    libx11-6 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy requirements first for better caching
+COPY requirements.txt .
+
+# Install Python dependencies
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy application code
+COPY . .
+
+# Set environment variables
+ENV QT_QPA_PLATFORM=xcb
+ENV QT_XCB_GLX=1
+ENV PYTHONUNBUFFERED=1
+ENV DISPLAY=:0
+
+# Create virtual display (for headless operation)
+RUN echo "#!/bin/bash\nXvfb :0 -screen 0 1920x1080x24 &\nsleep 2\nexec \"\$@\"" > /start_xvfb.sh && \
+    chmod +x /start_xvfb.sh
+
+# Default command - try to start GUI, fallback to backend mode
+CMD ["/start_xvfb.sh", "python", "main.py"]

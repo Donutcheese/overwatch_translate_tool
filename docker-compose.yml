@@ -1,0 +1,60 @@
+version: '3.8'
+
+services:
+  # Backend service (OCR + Translation)
+  translator:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ow-translator
+    environment:
+      - GLM_API_KEY=${GLM_API_KEY:-}
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-}
+      - GLM_OCR_URL=${GLM_OCR_URL:-https://open.bigmodel.cn/api/paas/v4/chat/completions}
+      - DEEPSEEK_URL=${DEEPSEEK_URL:-https://api.deepseek.com/chat/completions}
+      - HTTP_TIMEOUT_SEC=${HTTP_TIMEOUT_SEC:-30}
+      - QT_QPA_PLATFORM=offscreen
+    volumes:
+      # Mount local_api_keys if exists (optional)
+      - ./local_api_keys.py:/app/local_api_keys.py:ro
+      # For future screenshot saving
+      - ./screenshots:/app/screenshots
+    networks:
+      - translator-net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # GUI mode (requires X11 socket mounting)
+  translator-gui:
+    build:
+      context: .
+      dockerfile: Dockerfile.gui
+    container_name: ow-translator-gui
+    environment:
+      - DISPLAY=${DISPLAY}
+      - QT_QPA_PLATFORM=xcb
+      - GLM_API_KEY=${GLM_API_KEY:-}
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-}
+    volumes:
+      # X11 socket for GUI display
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      # X11 authentication
+      - ${XAUTHORITY:-$HOME/.Xauthority}:/root/.Xauthority:ro
+      # Local keys (optional)
+      - ./local_api_keys.py:/app/local_api_keys.py:ro
+      # Screenshots output
+      - ./screenshots:/app/screenshots
+    networks:
+      - translator-net
+    devices:
+      # For screen capture (mss library)
+      - /dev/dri:/dev/dri
+    restart: unless-stopped
+
+networks:
+  translator-net:
+    driver: bridge
