@@ -1,4 +1,4 @@
-"""Overlay window implementation."""
+"""Overlay window implementation (CustomTkinter)."""
 
 from __future__ import annotations
 
@@ -7,21 +7,11 @@ import ctypes
 import html
 import os
 import sys
+import tkinter.font as tkfont
 from concurrent.futures import Future
 from typing import Any
 
-from PyQt6.QtCore import QPoint, QRect, Qt, QTimer, pyqtSignal
-from PyQt6.QtGui import QColor
-from PyQt6.QtWidgets import (
-    QFrame,
-    QHBoxLayout,
-    QLabel,
-    QMainWindow,
-    QPushButton,
-    QTextBrowser,
-    QVBoxLayout,
-    QWidget,
-)
+import customtkinter as ctk
 
 from ..core.config import TransResult
 from ..runtime.async_runtime import AsyncRuntime
@@ -29,187 +19,304 @@ from ..services.api_client import OWColorFluentApiClient, capture_region_to_base
 
 try:
     import keyboard  # type: ignore
-except Exception:  # pragma: no cover - 在不支持平台上兜底
+except Exception:  # pragma: no cover
     keyboard = None
+
+try:
+    import win32gui  # type: ignore
+except Exception:  # pragma: no cover
+    win32gui = None
 
 
 HOTKEY_CAPTURE: str = os.getenv("HOTKEY_CAPTURE", "f8")
 HOTKEY_TOGGLE_LOCK: str = os.getenv("HOTKEY_TOGGLE_LOCK", "f9")
 
+TRANSPARENT_COLOR = "#000001"
 
-class OverlayWindow(QMainWindow):
+GWL_EXSTYLE = -20
+WS_EX_LAYERED = 0x00080000
+WS_EX_TRANSPARENT = 0x00000020
+SWP_NOMOVE = 0x0002
+SWP_NOSIZE = 0x0001
+SWP_NOZORDER = 0x0004
+SWP_FRAMECHANGED = 0x0020
+
+MIN_HEIGHT = 180
+MIN_WIDTH = int(MIN_HEIGHT * 1.5)
+# 1080p 下悬浮窗高度为 MIN_HEIGHT，以此为字体与控件缩放基准
+BASE_REFERENCE_HEIGHT = MIN_HEIGHT
+
+
+def _enable_dpi_awareness() -> None:
+    if not sys.platform.startswith("win"):
+        return
+    try:
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)
+    except Exception:
+        try:
+            ctypes.windll.user32.SetProcessDPIAware()
+        except Exception:
+            pass
+
+
+class OverlayWindow(ctk.CTk):
     """主悬浮窗：可拖拽/缩放，支持锁定穿透与热键触发识别。"""
 
-    pipeline_done = pyqtSignal(object, str)  # data, error
-    capture_hotkey_fired = pyqtSignal()
-    lock_hotkey_fired = pyqtSignal()
-
     def __init__(self) -> None:
-        super().__init__()
-        self._runtime = AsyncRuntime()
+        _enable_dpi_awareness()
+        ctk.set_appearance_mode("dark")
+        ctk.set_default_color_theme("blue")
 
+        super().__init__()
+
+        self._runtime = AsyncRuntime()
         self._locked = False
         self._busy = False
         self._dragging = False
         self._resizing = False
-        self._drag_offset = QPoint()
-        self._resize_start_global = QPoint()
-        self._resize_start_rect = QRect()
-        self._header_height = 42
+        self._drag_offset_x = 0
+        self._drag_offset_y = 0
+        self._resize_start_x = 0
+        self._resize_start_y = 0
+        self._resize_start_w = 0
+        self._resize_start_h = 0
+        self._tag_counter = 0
         self._resize_handle_size = 16
+        self._font_scale = 1.0
+        self._last_scaled_h = 0
 
-        # TODO(#1): 校准 Overlay 默认尺寸与最小尺寸，使其更贴合 OW 聊天框比例。
-        # TODO(#2): 增加分辨率预设（16:9 / 21:9 / 16:10）并在运行时快速切换。
-        self.setWindowTitle("OW-Color-Fluent-Translator")
-        self.setMinimumSize(360, 220)
-        self.resize(540, 340)
-        self.move(220, 180)
+        self.title("OW-Color-Fluent-Translator")
+        self.overrideredirect(True)
+        self.attributes("-topmost", True)
+        self.configure(fg_color=TRANSPARENT_COLOR)
+        self.attributes("-transparentcolor", TRANSPARENT_COLOR)
 
-        self.setWindowFlags(
-            Qt.WindowType.FramelessWindowHint
-            | Qt.WindowType.WindowStaysOnTopHint
-            | Qt.WindowType.Tool
-        )
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self._min_w = MIN_WIDTH
+        self._min_h = MIN_HEIGHT
+        self._init_font_scale_from_screen()
 
         self._build_ui()
-        self._connect_signals()
+        self._connect_events()
         self._register_hotkeys()
+        self._update_geometry_by_ratio()
+        self._apply_ui_scale()
         self._apply_lock_mode(False)
         self._update_region_label()
         self._set_status("待命", "#6EE7B7")
 
+        self._insert_colored_text("等待识别...", newline=True)
+        self._insert_colored_text("使用热键触发识别。", color="#94A3B8")
+
+    def _get_screen_size(self) -> tuple[int, int]:
+        if sys.platform.startswith("win"):
+            try:
+                width = int(ctypes.windll.user32.GetSystemMetrics(0))
+                height = int(ctypes.windll.user32.GetSystemMetrics(1))
+                if width > 0 and height > 0:
+                    return width, height
+            except Exception:
+                pass
+        self.update_idletasks()
+        return int(self.winfo_screenwidth()), int(self.winfo_screenheight())
+
+    def _update_geometry_by_ratio(self) -> None:
+        screen_w, screen_h = self._get_screen_size()
+        height = max(MIN_HEIGHT, int(screen_h / 6))
+        width = max(MIN_WIDTH, int(height * 1.5))
+        x = 20
+        y = screen_h - height - 20
+        self._set_font_scale_from_height(height)
+        self.geometry(f"{width}x{height}+{x}+{y}")
+        self.update_idletasks()
+
+    def _init_font_scale_from_screen(self) -> None:
+        _, screen_h = self._get_screen_size()
+        height = max(MIN_HEIGHT, int(screen_h / 6))
+        self._set_font_scale_from_height(height)
+
+    def _set_font_scale_from_height(self, height: int) -> None:
+        self._font_scale = max(1.0, height / BASE_REFERENCE_HEIGHT)
+        self._resize_handle_size = max(16, int(height * 0.09))
+        self._last_scaled_h = height
+
+    def _font_size(self, base: int) -> int:
+        return max(9, int(round(base * self._font_scale)))
+
+    def _scaled_px(self, base: int) -> int:
+        return max(1, int(round(base * self._font_scale)))
+
+    def _scaled_font(self, base_size: int, weight: str = "normal") -> tkfont.Font:
+        return tkfont.Font(
+            family="Segoe UI",
+            size=self._font_size(base_size),
+            weight=weight,
+        )
+
+    def _apply_ui_scale(self) -> None:
+        dot_w = self._scaled_px(14)
+        btn_w = self._scaled_px(90)
+        btn_h = self._scaled_px(28)
+        close_sz = self._scaled_px(28)
+
+        self.dot_status.configure(width=dot_w, font=self._scaled_font(14))
+        self.title_label.configure(font=self._scaled_font(14, "bold"))
+        self.mode_label.configure(font=self._scaled_font(12))
+        self.capture_btn.configure(
+            width=btn_w,
+            height=btn_h,
+            font=self._scaled_font(12),
+        )
+        self.lock_btn.configure(
+            width=btn_w,
+            height=btn_h,
+            font=self._scaled_font(12),
+        )
+        self.close_btn.configure(
+            width=close_sz,
+            height=close_sz,
+            font=self._scaled_font(14, "bold"),
+        )
+        self.region_label.configure(font=self._scaled_font(12))
+        self.result_view.configure(font=self._scaled_font(13))
+        self.resize_tip.configure(
+            width=self._resize_handle_size,
+            height=self._resize_handle_size,
+            font=self._scaled_font(12),
+        )
+
+    def _maybe_apply_ui_scale(self) -> None:
+        height = int(self.winfo_height())
+        if height < MIN_HEIGHT:
+            return
+        if abs(height - self._last_scaled_h) < 2:
+            return
+        self._last_scaled_h = height
+        self._set_font_scale_from_height(height)
+        self._apply_ui_scale()
+
     def _build_ui(self) -> None:
-        root = QWidget(self)
-        self.setCentralWidget(root)
-
-        outer = QVBoxLayout(root)
-        outer.setContentsMargins(10, 10, 10, 10)
-        outer.setSpacing(0)
-
-        self.card = QFrame()
-        self.card.setObjectName("card")
-        card_layout = QVBoxLayout(self.card)
-        card_layout.setContentsMargins(12, 10, 12, 12)
-        card_layout.setSpacing(8)
-        outer.addWidget(self.card)
-
-        header = QHBoxLayout()
-        header.setSpacing(8)
-        card_layout.addLayout(header)
-
-        self.dot_status = QLabel("●")
-        self.dot_status.setFixedWidth(14)
-        self.dot_status.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        header.addWidget(self.dot_status)
-
-        self.title_label = QLabel("OW Color Fluent Translator")
-        self.title_label.setObjectName("title")
-        header.addWidget(self.title_label, 1)
-
-        self.mode_label = QLabel("编辑模式")
-        self.mode_label.setObjectName("mode")
-        header.addWidget(self.mode_label)
-
-        self.capture_btn = QPushButton(f"识别({HOTKEY_CAPTURE.upper()})")
-        self.capture_btn.setObjectName("btnPrimary")
-        header.addWidget(self.capture_btn)
-
-        self.lock_btn = QPushButton(f"锁定({HOTKEY_TOGGLE_LOCK.upper()})")
-        self.lock_btn.setObjectName("btn")
-        header.addWidget(self.lock_btn)
-
-        self.close_btn = QPushButton("×")
-        self.close_btn.setObjectName("btnClose")
-        self.close_btn.setFixedWidth(28)
-        header.addWidget(self.close_btn)
-
-        self.region_label = QLabel()
-        self.region_label.setObjectName("hint")
-        card_layout.addWidget(self.region_label)
-
-        self.result_view = QTextBrowser()
-        self.result_view.setObjectName("result")
-        self.result_view.setOpenExternalLinks(False)
-        self.result_view.setReadOnly(True)
-        self.result_view.setText("等待识别...\n使用热键触发识别。")
-        card_layout.addWidget(self.result_view, 1)
-
-        self.resize_tip = QLabel("◢")
-        self.resize_tip.setObjectName("hint")
-        self.resize_tip.setAlignment(
-            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignBottom
+        self.card = ctk.CTkFrame(
+            self,
+            fg_color="#0F172A",
+            corner_radius=12,
+            border_width=1,
+            border_color="#94A3B8",
         )
-        card_layout.addWidget(self.resize_tip, 0, Qt.AlignmentFlag.AlignRight)
+        self.card.pack(fill="both", expand=True, padx=10, pady=10)
 
-        self._apply_styles()
+        self.header = ctk.CTkFrame(self.card, fg_color="transparent")
+        self.header.pack(fill="x", padx=4, pady=(4, 0))
 
-    def _apply_styles(self) -> None:
-        self.setStyleSheet(
-            """
-            QFrame#card {
-                background: rgba(15, 23, 42, 220);
-                border: 1px solid rgba(148, 163, 184, 120);
-                border-radius: 12px;
-            }
-            QLabel#title {
-                color: #E2E8F0;
-                font-size: 14px;
-                font-weight: 700;
-            }
-            QLabel#mode {
-                color: #93C5FD;
-                font-size: 12px;
-            }
-            QLabel#hint {
-                color: #94A3B8;
-                font-size: 12px;
-            }
-            QPushButton#btnPrimary {
-                background: #2563EB;
-                color: #FFFFFF;
-                border: none;
-                border-radius: 8px;
-                padding: 6px 10px;
-                font-size: 12px;
-            }
-            QPushButton#btnPrimary:hover { background: #1D4ED8; }
-            QPushButton#btn {
-                background: #334155;
-                color: #E2E8F0;
-                border: none;
-                border-radius: 8px;
-                padding: 6px 10px;
-                font-size: 12px;
-            }
-            QPushButton#btn:hover { background: #475569; }
-            QPushButton#btnClose {
-                background: #7F1D1D;
-                color: #FEE2E2;
-                border: none;
-                border-radius: 8px;
-                font-size: 14px;
-                font-weight: 700;
-            }
-            QPushButton#btnClose:hover { background: #991B1B; }
-            QTextBrowser#result {
-                background: rgba(2, 6, 23, 190);
-                border: 1px solid rgba(71, 85, 105, 120);
-                border-radius: 10px;
-                color: #E2E8F0;
-                font-size: 13px;
-                padding: 8px;
-            }
-            """
+        self.dot_status = ctk.CTkLabel(
+            self.header,
+            text="●",
+            width=self._scaled_px(14),
+            font=self._scaled_font(14),
+            text_color="#6EE7B7",
         )
+        self.dot_status.pack(side="left", padx=(0, 4))
 
-    def _connect_signals(self) -> None:
-        self.capture_btn.clicked.connect(self.trigger_capture)
-        self.lock_btn.clicked.connect(self.toggle_lock_mode)
-        self.close_btn.clicked.connect(self.close)
-        self.pipeline_done.connect(self._handle_pipeline_done)
-        self.capture_hotkey_fired.connect(self.trigger_capture)
-        self.lock_hotkey_fired.connect(self.toggle_lock_mode)
+        self.title_label = ctk.CTkLabel(
+            self.header,
+            text="OW Color Fluent Translator",
+            font=self._scaled_font(14, "bold"),
+            text_color="#E2E8F0",
+            anchor="w",
+        )
+        self.title_label.pack(side="left", fill="x", expand=True)
+
+        self.mode_label = ctk.CTkLabel(
+            self.header,
+            text="编辑模式",
+            font=self._scaled_font(12),
+            text_color="#93C5FD",
+        )
+        self.mode_label.pack(side="left", padx=(8, 8))
+
+        self.capture_btn = ctk.CTkButton(
+            self.header,
+            text=f"识别({HOTKEY_CAPTURE.upper()})",
+            width=self._scaled_px(90),
+            height=self._scaled_px(28),
+            font=self._scaled_font(12),
+            fg_color="#2563EB",
+            hover_color="#1D4ED8",
+            command=self.trigger_capture,
+        )
+        self.capture_btn.pack(side="left", padx=(0, 4))
+
+        self.lock_btn = ctk.CTkButton(
+            self.header,
+            text=f"锁定({HOTKEY_TOGGLE_LOCK.upper()})",
+            width=self._scaled_px(90),
+            height=self._scaled_px(28),
+            font=self._scaled_font(12),
+            fg_color="#334155",
+            hover_color="#475569",
+            command=self.toggle_lock_mode,
+        )
+        self.lock_btn.pack(side="left", padx=(0, 4))
+
+        self.close_btn = ctk.CTkButton(
+            self.header,
+            text="×",
+            width=self._scaled_px(28),
+            height=self._scaled_px(28),
+            font=self._scaled_font(14, "bold"),
+            fg_color="#7F1D1D",
+            hover_color="#991B1B",
+            command=self._on_close,
+        )
+        self.close_btn.pack(side="left")
+
+        self.region_label = ctk.CTkLabel(
+            self.card,
+            text="",
+            font=self._scaled_font(12),
+            text_color="#94A3B8",
+            anchor="w",
+        )
+        self.region_label.pack(fill="x", padx=8, pady=(6, 4))
+
+        self.result_view = ctk.CTkTextbox(
+            self.card,
+            font=self._scaled_font(13),
+            fg_color="#020617",
+            border_color="#475569",
+            border_width=1,
+            text_color="#E2E8F0",
+            wrap="word",
+            activate_scrollbars=True,
+        )
+        self.result_view.pack(fill="both", expand=True, padx=8, pady=(0, 4))
+
+        self.resize_tip = ctk.CTkLabel(
+            self.card,
+            text="◢",
+            font=self._scaled_font(12),
+            text_color="#94A3B8",
+            width=self._resize_handle_size,
+            height=self._resize_handle_size,
+        )
+        self.resize_tip.place(relx=1.0, rely=1.0, anchor="se", x=-8, y=-8)
+
+        drag_widgets = (
+            self.header,
+            self.dot_status,
+            self.title_label,
+            self.mode_label,
+        )
+        for widget in drag_widgets:
+            widget.bind("<Button-1>", self._on_drag_start, add="+")
+            widget.bind("<B1-Motion>", self._on_drag_motion, add="+")
+            widget.bind("<ButtonRelease-1>", self._on_drag_release, add="+")
+
+        self.resize_tip.bind("<Button-1>", self._on_resize_start)
+        self.resize_tip.bind("<B1-Motion>", self._on_resize_motion)
+        self.resize_tip.bind("<ButtonRelease-1>", self._on_resize_release)
+
+    def _connect_events(self) -> None:
+        self.bind("<Configure>", self._on_configure)
 
     def _register_hotkeys(self) -> None:
         if keyboard is None:
@@ -217,15 +324,60 @@ class OverlayWindow(QMainWindow):
             return
         try:
             keyboard.add_hotkey(
-                HOTKEY_CAPTURE, lambda: self.capture_hotkey_fired.emit(), suppress=False
+                HOTKEY_CAPTURE,
+                lambda: self.after(0, self.trigger_capture),
+                suppress=False,
             )
             keyboard.add_hotkey(
                 HOTKEY_TOGGLE_LOCK,
-                lambda: self.lock_hotkey_fired.emit(),
+                lambda: self.after(0, self.toggle_lock_mode),
                 suppress=False,
             )
         except Exception as exc:
             self._append_message(f"热键注册失败：{exc}", "#F59E0B")
+
+    def _get_hwnd(self) -> int:
+        wid = int(self.winfo_id())
+        if win32gui is not None:
+            try:
+                parent = win32gui.GetParent(wid)
+                if parent:
+                    return int(parent)
+            except Exception:
+                pass
+        return wid
+
+    def _refresh_window_style(self, hwnd: int) -> None:
+        if not sys.platform.startswith("win"):
+            return
+        try:
+            ctypes.windll.user32.SetWindowPos(
+                hwnd,
+                0,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED,
+            )
+        except Exception:
+            pass
+
+    def _set_click_through(self, enabled: bool) -> None:
+        if not sys.platform.startswith("win"):
+            return
+        try:
+            hwnd = self._get_hwnd()
+            style = ctypes.windll.user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
+            style |= WS_EX_LAYERED
+            if enabled:
+                style |= WS_EX_TRANSPARENT
+            else:
+                style &= ~WS_EX_TRANSPARENT
+            ctypes.windll.user32.SetWindowLongW(hwnd, GWL_EXSTYLE, style)
+            self._refresh_window_style(hwnd)
+        except Exception:
+            pass
 
     def trigger_capture(self) -> None:
         if self._busy:
@@ -238,9 +390,14 @@ class OverlayWindow(QMainWindow):
         self._busy = True
         self._set_status("识别中", "#60A5FA")
 
-        self.hide()
-        QTimer.singleShot(90, lambda: self._launch_pipeline(region))
-        QTimer.singleShot(180, self.show)
+        self.withdraw()
+        self.after(90, lambda: self._launch_pipeline(region))
+        self.after(180, self._restore_after_capture)
+
+    def _restore_after_capture(self) -> None:
+        self.deiconify()
+        self.attributes("-topmost", True)
+        self.lift()
 
     def _launch_pipeline(self, region: dict[str, int]) -> None:
         future = self._runtime.submit(self._pipeline(region))
@@ -249,9 +406,9 @@ class OverlayWindow(QMainWindow):
     def _on_pipeline_future_done(self, future: Future) -> None:
         try:
             payload = future.result()
-            self.pipeline_done.emit(payload, "")
+            self.after(0, self._handle_pipeline_done, payload, "")
         except Exception as exc:
-            self.pipeline_done.emit(None, str(exc))
+            self.after(0, self._handle_pipeline_done, None, str(exc))
 
     async def _pipeline(self, region: dict[str, int]) -> dict[str, Any]:
         capture_data = await asyncio.to_thread(capture_region_to_base64, region)
@@ -281,32 +438,47 @@ class OverlayWindow(QMainWindow):
             self._set_status("无结果", "#F59E0B")
             self._render_ocr_fallback(ocr_results)
 
+    def _insert_colored_text(
+        self,
+        text: str,
+        color: str = "#E2E8F0",
+        bold: bool = False,
+        newline: bool = True,
+    ) -> None:
+        self._tag_counter += 1
+        tag_name = f"color_tag_{self._tag_counter}"
+        weight = "bold" if bold else "normal"
+        font = self._scaled_font(13, weight)
+        self.result_view.tag_config(tag_name, foreground=color)
+        try:
+            self.result_view._textbox.tag_config(tag_name, foreground=color, font=font)
+        except Exception:
+            pass
+        content = text + ("\n" if newline else "")
+        self.result_view.insert("end", content, tag_name)
+        self.result_view.see("end")
+
     def update_translation_list(self, results: list[TransResult]) -> None:
-        lines: list[str] = []
+        self.result_view.delete("1.0", "end")
         for item in results:
             color = "#E2E8F0"
             label = "Unknown"
             if item.color_tag is not None:
                 color = item.color_tag.hex_color
                 label = item.color_tag.label
-            text = html.escape(item.translated.strip() or "(空)")
-            lines.append(
-                f'<div style="margin-bottom:6px;">'
-                f'<span style="color:{color};font-weight:700;">[{label}]</span> '
-                f'<span style="color:{color};">{text}</span></div>'
-            )
-        self.result_view.setHtml("".join(lines))
+            text = html.unescape(item.translated.strip() or "(空)")
+            self._insert_colored_text(f"[{label}] ", color=color, bold=True, newline=False)
+            self._insert_colored_text(text, color=color, bold=False, newline=True)
 
     def _render_ocr_fallback(self, ocr_results: list[Any]) -> None:
+        self.result_view.delete("1.0", "end")
         if not ocr_results:
-            self.result_view.setText("无可用 OCR 结果。")
+            self._insert_colored_text("无可用 OCR 结果。")
             return
-        lines: list[str] = []
         for item in ocr_results:
             label = getattr(getattr(item, "color_tag", None), "label", "Unknown")
             msg = getattr(item, "error_msg", None) or "无文本输出"
-            lines.append(f"[{label}] {msg}")
-        self.result_view.setText("\n".join(lines))
+            self._insert_colored_text(f"[{label}] {msg}", newline=True)
 
     def toggle_lock_mode(self) -> None:
         self._apply_lock_mode(not self._locked)
@@ -314,127 +486,97 @@ class OverlayWindow(QMainWindow):
     def _apply_lock_mode(self, locked: bool) -> None:
         self._locked = locked
         if locked:
-            self.mode_label.setText("锁定穿透")
-            self.lock_btn.setText(f"解锁({HOTKEY_TOGGLE_LOCK.upper()})")
-            self.resize_tip.hide()
+            self.mode_label.configure(text="锁定穿透")
+            self.lock_btn.configure(text=f"解锁({HOTKEY_TOGGLE_LOCK.upper()})")
+            self.resize_tip.place_forget()
             self._set_click_through(True)
         else:
-            self.mode_label.setText("编辑模式")
-            self.lock_btn.setText(f"锁定({HOTKEY_TOGGLE_LOCK.upper()})")
-            self.resize_tip.show()
+            self.mode_label.configure(text="编辑模式")
+            self.lock_btn.configure(text=f"锁定({HOTKEY_TOGGLE_LOCK.upper()})")
+            self.resize_tip.place(relx=1.0, rely=1.0, anchor="se", x=-8, y=-8)
             self._set_click_through(False)
         self._update_region_label()
 
-    def _set_click_through(self, enabled: bool) -> None:
-        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, enabled)
-        if sys.platform.startswith("win"):
-            try:
-                hwnd = int(self.winId())
-                GWL_EXSTYLE = -20
-                WS_EX_LAYERED = 0x00080000
-                WS_EX_TRANSPARENT = 0x00000020
-                style = ctypes.windll.user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
-                style |= WS_EX_LAYERED
-                if enabled:
-                    style |= WS_EX_TRANSPARENT
-                else:
-                    style &= ~WS_EX_TRANSPARENT
-                ctypes.windll.user32.SetWindowLongW(hwnd, GWL_EXSTYLE, style)
-            except Exception:
-                pass
-
-    def mousePressEvent(self, event: Any) -> None:
-        if self._locked or event.button() != Qt.MouseButton.LeftButton:
-            super().mousePressEvent(event)
-            return
-
-        pos = event.position().toPoint()
-        if self._is_on_resize_handle(pos):
-            self._resizing = True
-            self._resize_start_global = event.globalPosition().toPoint()
-            self._resize_start_rect = self.geometry()
-            return
-
-        child = self.childAt(pos)
-        if isinstance(child, (QPushButton, QTextBrowser)):
-            super().mousePressEvent(event)
-            return
-
-        if pos.y() <= self._header_height:
-            self._dragging = True
-            self._drag_offset = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
-        super().mousePressEvent(event)
-
-    def mouseMoveEvent(self, event: Any) -> None:
+    def _on_drag_start(self, event: Any) -> None:
         if self._locked:
-            super().mouseMoveEvent(event)
             return
-        if self._dragging:
-            self.move(event.globalPosition().toPoint() - self._drag_offset)
-            self._update_region_label()
-        elif self._resizing:
-            delta = event.globalPosition().toPoint() - self._resize_start_global
-            new_w = max(self.minimumWidth(), self._resize_start_rect.width() + delta.x())
-            new_h = max(self.minimumHeight(), self._resize_start_rect.height() + delta.y())
-            self.resize(new_w, new_h)
-            self._update_region_label()
-        super().mouseMoveEvent(event)
+        self._dragging = True
+        self._drag_offset_x = event.x_root - self.winfo_x()
+        self._drag_offset_y = event.y_root - self.winfo_y()
 
-    def mouseReleaseEvent(self, event: Any) -> None:
+    def _on_drag_motion(self, event: Any) -> None:
+        if self._locked or not self._dragging:
+            return
+        x = event.x_root - self._drag_offset_x
+        y = event.y_root - self._drag_offset_y
+        self.geometry(f"+{x}+{y}")
+
+    def _on_drag_release(self, _event: Any) -> None:
         self._dragging = False
+
+    def _on_resize_start(self, event: Any) -> None:
+        if self._locked:
+            return
+        self._resizing = True
+        self._resize_start_x = event.x_root
+        self._resize_start_y = event.y_root
+        self._resize_start_w = self.winfo_width()
+        self._resize_start_h = self.winfo_height()
+
+    def _on_resize_motion(self, event: Any) -> None:
+        if self._locked or not self._resizing:
+            return
+        delta_x = event.x_root - self._resize_start_x
+        delta_y = event.y_root - self._resize_start_y
+        new_w = max(self._min_w, self._resize_start_w + delta_x)
+        new_h = max(self._min_h, self._resize_start_h + delta_y)
+        self.geometry(f"{new_w}x{new_h}")
+        self._maybe_apply_ui_scale()
+
+    def _on_resize_release(self, _event: Any) -> None:
         self._resizing = False
-        super().mouseReleaseEvent(event)
+        self._maybe_apply_ui_scale()
 
-    def moveEvent(self, event: Any) -> None:
+    def _on_configure(self, event: Any) -> None:
+        if event.widget is self:
+            self._maybe_apply_ui_scale()
         self._update_region_label()
-        super().moveEvent(event)
-
-    def resizeEvent(self, event: Any) -> None:
-        self._update_region_label()
-        super().resizeEvent(event)
-
-    def _is_on_resize_handle(self, pos: QPoint) -> bool:
-        rect = self.rect()
-        return (
-            rect.width() - self._resize_handle_size <= pos.x() <= rect.width()
-            and rect.height() - self._resize_handle_size <= pos.y() <= rect.height()
-        )
 
     def _current_capture_region(self) -> dict[str, int]:
-        geo = self.frameGeometry()
+        self.update_idletasks()
         return {
-            "left": max(0, geo.x()),
-            "top": max(0, geo.y()),
-            "width": max(1, geo.width()),
-            "height": max(1, geo.height()),
+            "left": max(0, int(self.winfo_rootx())),
+            "top": max(0, int(self.winfo_rooty())),
+            "width": max(1, int(self.winfo_width())),
+            "height": max(1, int(self.winfo_height())),
         }
 
     def _set_status(self, text: str, color: str) -> None:
-        self.dot_status.setStyleSheet(f"color:{color}; font-size: 14px;")
-        self.mode_label.setStyleSheet(f"color:{color}; font-size: 12px;")
+        self.dot_status.configure(text_color=color)
         if self._locked:
-            self.mode_label.setText(f"锁定穿透 · {text}")
+            self.mode_label.configure(text=f"锁定穿透 · {text}", text_color=color)
         else:
-            self.mode_label.setText(f"编辑模式 · {text}")
+            self.mode_label.configure(text=f"编辑模式 · {text}", text_color=color)
 
     def _append_message(self, text: str, color: str = "#E2E8F0") -> None:
-        safe = html.escape(text)
-        self.result_view.append(f'<span style="color:{QColor(color).name()};">{safe}</span>')
+        safe = html.unescape(text)
+        self._insert_colored_text(safe, color=color)
 
     def _update_region_label(self) -> None:
         region = self._current_capture_region()
         lock_text = "锁定穿透" if self._locked else "可拖拽/可缩放"
-        self.region_label.setText(
-            f"区域: x={region['left']} y={region['top']} "
-            f"w={region['width']} h={region['height']} | {lock_text}"
+        self.region_label.configure(
+            text=(
+                f"区域: x={region['left']} y={region['top']} "
+                f"w={region['width']} h={region['height']} | {lock_text}"
+            )
         )
 
-    def closeEvent(self, event: Any) -> None:
+    def _on_close(self) -> None:
         try:
             if keyboard is not None:
                 keyboard.unhook_all_hotkeys()
         except Exception:
             pass
         self._runtime.stop()
-        super().closeEvent(event)
-
+        self.destroy()

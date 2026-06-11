@@ -5,16 +5,12 @@ services:
     build: .
     container_name: ow-translator-dev
     environment:
-      # API Keys - 运行时指定
       - GLM_API_KEY=${GLM_API_KEY:-}
       - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-}
-      # 或者使用本地文件
       - GLM_API_KEY_FILE=/secrets/glm_api_key
       - DEEPSEEK_API_KEY_FILE=/secrets/deepseek_api_key
     volumes:
-      # 挂载项目代码（实时更新）
       - .:/app
-      # 挂载密钥文件（可选）
       - ./secrets:/secrets:ro
     stdin_open: true
     tty: true

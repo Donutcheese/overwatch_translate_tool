@@ -1,13 +1,15 @@
 # OW-Light-Translator
 # Python >= 3.10
+# 完整依赖（Windows 本地运行 Overlay GUI）
 
-# --- 核心（config.py / prompts.py / api_client.py）---
+# --- 核心（config / prompts / api_client）---
 python-dotenv>=1.0.0
 httpx>=0.27.0
 mss>=9.0.1
 numpy>=1.26.0
 opencv-python>=4.10.0
 
-# --- UI 与全局热键（main.py，待完成）---
-PyQt6>=6.6.0
-keyboard>=0.13.5
+# --- UI 与全局热键（仅 Windows 完整功能）---
+customtkinter>=5.2.2
+pywin32>=306          # 鼠标穿透、DPI 感知（Windows）
+keyboard>=0.13.5      # 全局热键 F8/F9（Windows，建议管理员运行）

@@ -49,17 +49,22 @@ OCR currently relies on **default settings**: multi-channel masking based on fou
   <img src="img/image.png" alt="OW-Light-Translator detailed system flowchart" width="900">
 </p>
 
-> Above: full pipeline — `mss` region capture (in-memory Base64) → `COLOR_PALETTE` multi-channel masking → Zhipu GLM-OCR → DeepSeek localization → PyQt6 overlay with semantic color rendering.
+> Above: full pipeline — `mss` region capture (in-memory Base64) → `COLOR_PALETTE` multi-channel masking → Zhipu GLM-OCR → DeepSeek localization → CustomTkinter overlay with semantic color rendering.
 
 ### Project structure
 
 ```
 overwatch_translate_tool/
-├── main.py            # PyQt6 app, hotkeys, async event loop
-├── api_client.py      # Async HTTP client for GLM-OCR / DeepSeek
-├── config.py          # DTOs and environment variables
-├── prompts.py         # OW slang translation System Prompt
-├── local_api_keys.py  # Local API keys (gitignored)
+├── main.py                  # Entry point (calls ow_color_fluent.app.main)
+├── ow_color_fluent/         # Main package (UI, API, runtime)
+├── api_client.py            # Compatibility re-exports
+├── config.py                # Compatibility re-exports
+├── prompts.py               # Compatibility re-exports
+├── local_api_keys.py        # Local API keys (gitignored)
+├── requirements.txt         # Full Windows deps (UI included)
+├── requirements-docker.txt    # Docker API-only deps
+├── Dockerfile / docker-compose.yml
+├── DOCKER_README.md
 ├── img/
 │   ├── image.png      # Detailed system flowchart
 │   └── font_color.png # Chat color semantics reference
@@ -89,11 +94,11 @@ For contributors: environment setup, tech stack, and collaboration workflow.
 
 | Layer | Library / Service | Version | Role in this project |
 |-------|-------------------|---------|----------------------|
-| UI | [PyQt6](https://www.riverbankcomputing.com/software/pyqt/) | `>=6.6.0` | Frameless overlay, drag/resize, click-through lock mode, color-coded rendering |
+| UI | [CustomTkinter](https://github.com/TomSchimansky/CustomTkinter) | `>=5.2.2` | Frameless transparent overlay, drag/resize, color-coded text |
+| Windows API | [pywin32](https://github.com/mhammond/pywin32) | `>=306` | DPI awareness, mouse click-through (`WS_EX_TRANSPARENT`) |
 | Capture | [mss](https://python-mss.readthedocs.io/) | `>=9.0.1` | Region desktop capture, in-memory only |
 | Image | [OpenCV](https://opencv.org/) | `>=4.10` | Color masking (`inRange`), morphology, in-memory PNG encode |
 | Numeric | [NumPy](https://numpy.org/) | `>=1.26` | Frame and mask array operations |
-| Image | [Pillow](https://python-pillow.org/) | `>=10.3` | Image format helpers |
 | Network | [httpx](https://www.python-httpx.org/) | `>=0.27` | Async HTTP to GLM-OCR and DeepSeek |
 | Concurrency | `asyncio` (stdlib) | — | Decouple UI thread from OCR/translation workers |
 | Hotkeys | [keyboard](https://github.com/boppreh/keyboard) | `>=0.13.5` | Global shortcuts (capture, lock toggle) |
@@ -114,8 +119,10 @@ pip install -U pip
 pip install -r requirements.txt
 
 # Configure API keys (see below), then:
-python main.py                      # once main.py is ready
+python main.py
 ```
+
+Default hotkeys: `F8` capture/OCR, `F9` toggle lock/click-through (override via `HOTKEY_CAPTURE` / `HOTKEY_TOGGLE_LOCK`). Run PowerShell as **admin** if global hotkeys fail.
 
 #### API keys
 
@@ -141,7 +148,9 @@ HTTP_TIMEOUT_SEC=30
 | `config.py` | DTOs, `COLOR_PALETTE`, API endpoints | Chat color mask ranges, timeouts |
 | `prompts.py` | OCR/translation prompts, message builders | OW slang, translation tone |
 | `api_client.py` | Capture, masking, OCR/translation HTTP | Concurrency, retries, parsing |
-| `main.py` | PyQt6 UI, hotkeys, async loop | Overlay UX, rendering |
+| `ow_color_fluent/ui/overlay_window.py` | CustomTkinter overlay | Multi-resolution layout, click-through, rendering |
+| `ow_color_fluent/app.py` | App entry + `mainloop()` | Startup flow |
+| `main.py` | CLI entry | Usually unchanged |
 | `local_api_keys.py` | Local secrets | Machine-only, never commit |
 | `img/font_color.png` | Color semantics reference | Update when OW chat colors change |
 
@@ -195,7 +204,7 @@ asyncio.run(smoke_test())
 | `config.py` | ✅ Done |
 | `prompts.py` | ✅ Done (updatable) |
 | `api_client.py` | ✅ Done |
-| `main.py` | 🚧 In progress |
+| `main.py` / Overlay UI | ✅ Done (CustomTkinter) |
 
 ### Contributing & license
 

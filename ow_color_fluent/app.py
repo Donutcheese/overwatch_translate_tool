@@ -3,16 +3,14 @@
 from __future__ import annotations
 
 import sys
-
-from PyQt6.QtWidgets import QApplication, QMessageBox
+import tkinter.messagebox as messagebox
 
 from .ui.overlay_window import OverlayWindow
 
 
 def _show_startup_notice() -> None:
     if not sys.platform.startswith("win"):
-        QMessageBox.information(
-            None,
+        messagebox.showinfo(
             "平台提示",
             "当前平台不是 Windows。\n"
             "本项目目标运行环境为 Windows 10/11，\n"
@@ -21,10 +19,7 @@ def _show_startup_notice() -> None:
 
 
 def main() -> int:
-    app = QApplication(sys.argv)
     _show_startup_notice()
-
     window = OverlayWindow()
-    window.show()
-    return app.exec()
-
+    window.mainloop()
+    return 0

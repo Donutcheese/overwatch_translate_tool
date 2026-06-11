@@ -35,14 +35,15 @@
 
 #### TODO（OCR 与 UI）
 
-- [ ] **Qt 尺寸校准**：检查并调整 Overlay 默认尺寸、最小尺寸与拖拽缩放边界，确保与 OW 聊天框实际宽高比例更贴合。
+- [x] **多分辨率 Overlay 适配**：按屏幕高度比例自动计算窗口尺寸与位置（`H = screen_h / 6`，左下角定位），字体与控件随窗口缩放。
 - [ ] **可配置聊天颜色**：当前默认使用固定 `COLOR_PALETTE`；需支持玩家自定义聊天颜色主题（例如通过配置文件切换/覆盖 RGB 范围）。
 
 ### 核心特性
 
 | 特性 | 说明 |
 |------|------|
-| 双模式 UI | **编辑模式**：可拖拽、缩放选区；**锁定模式**：无边框、透明、鼠标穿透、置顶 |
+| 双模式 UI | **编辑模式**：可拖拽、缩放选区；**锁定模式**：无边框、透明、鼠标穿透（`pywin32`）、置顶 |
+| 多分辨率适配 | 按屏幕高度 `1/6` 自动缩放窗口与字体，1K / 2K / 4K 左下角比例一致 |
 | 零磁盘 I/O | 截图在内存中直接转 Base64，不写临时文件 |
 | 多通道 OCR | 按颜色掩码分通道识别，降低复杂背景干扰 |
 | 异步流水线 | UI / 热键不阻塞；截图 → OCR → 翻译在后台 `asyncio` worker 中完成 |
@@ -54,7 +55,7 @@
   <img src="img/image.png" alt="OW-Light-Translator 详细系统流程图" width="900">
 </p>
 
-> 上图：完整数据流——`mss` 区域截图（内存 Base64）→ 按 `COLOR_PALETTE` 多通道颜色掩码 → 智谱 GLM-OCR 识别 → DeepSeek 本地化翻译 → PyQt6 Overlay 按语义颜色渲染译文。
+> 上图：完整数据流——`mss` 区域截图（内存 Base64）→ 按 `COLOR_PALETTE` 多通道颜色掩码 → 智谱 GLM-OCR 识别 → DeepSeek 本地化翻译 → CustomTkinter Overlay 按语义颜色渲染译文。
 
 ### 项目结构
 
@@ -62,7 +63,7 @@
 overwatch_translate_tool/
 ├── main.py            # 启动入口（调用 ow_color_fluent.app.main）
 ├── ow_color_fluent/   # 模块化主包
-│   ├── app.py         # Qt 应用装配与运行入口
+│   ├── app.py         # CustomTkinter 应用入口与 mainloop
 │   ├── core/
 │   │   ├── config.py  # DTO、颜色语义、环境变量
 │   │   └── prompts.py # OCR/翻译 Prompt 策略
@@ -79,7 +80,11 @@ overwatch_translate_tool/
 ├── img/
 │   ├── image.png      # 详细系统流程图
 │   └── font_color.png # 聊天颜色语义参考图
-├── requirements.txt
+├── requirements.txt         # Windows 完整依赖（含 UI）
+├── requirements-docker.txt  # Docker API 开发依赖（无 UI）
+├── Dockerfile
+├── docker-compose.yml
+├── DOCKER_README.md
 ├── README.md
 ├── README.en.md
 ├── README.ja.md
@@ -105,11 +110,11 @@ overwatch_translate_tool/
 
 | 层级 | 库 / 服务 | 版本约束 | 在本项目中的作用 |
 |------|-----------|----------|------------------|
-| UI | [PyQt6](https://www.riverbankcomputing.com/software/pyqt/) | `>=6.6.0` | 无边框悬浮窗、拖拽缩放、锁定穿透、按颜色渲染译文 |
+| UI | [CustomTkinter](https://github.com/TomSchimansky/CustomTkinter) | `>=5.2.2` | 无边框透明悬浮窗、拖拽缩放、彩色文本渲染 |
+| Windows API | [pywin32](https://github.com/mhammond/pywin32) | `>=306` | DPI 感知、鼠标穿透（`WS_EX_TRANSPARENT`） |
 | 截图 | [mss](https://python-mss.readthedocs.io/) | `>=9.0.1` | 区域桌面截图，内存直出，不写临时文件 |
 | 图像处理 | [OpenCV](https://opencv.org/) | `>=4.10` | `inRange` 颜色掩码、形态学降噪、PNG 内存编码 |
 | 数值计算 | [NumPy](https://numpy.org/) | `>=1.26` | 截图帧与掩码数组运算 |
-| 图像辅助 | [Pillow](https://python-pillow.org/) | `>=10.3` | 图像格式互转（预留/辅助） |
 | 网络 | [httpx](https://www.python-httpx.org/) | `>=0.27` | GLM-OCR、DeepSeek 异步 HTTP 请求 |
 | 并发 | `asyncio`（标准库） | — | UI 主线程与 OCR/翻译 worker 解耦 |
 | 热键 | [keyboard](https://github.com/boppreh/keyboard) | `>=0.13.5` | 全局快捷键（截图、锁定切换等） |
@@ -133,9 +138,18 @@ pip install -U pip
 pip install -r requirements.txt
 
 # 4. 配置 API Key（见下方「密钥配置」）
-# 5. 启动主程序（main.py 完成后）
+# 5. 启动主程序
 python main.py
 ```
+
+默认热键（可通过环境变量 `HOTKEY_CAPTURE` / `HOTKEY_TOGGLE_LOCK` 覆盖）：
+
+| 热键 | 功能 |
+|------|------|
+| `F8` | 截取 Overlay 区域并触发 OCR + 翻译 |
+| `F9` | 切换编辑模式 / 锁定穿透模式 |
+
+> `keyboard` 全局热键在 Windows 上建议**以管理员身份**运行 PowerShell 后启动。
 
 #### 密钥配置
 
@@ -163,28 +177,25 @@ HTTP_TIMEOUT_SEC=30
 | `ow_color_fluent/core/config.py` | DTO、`COLOR_PALETTE`、API 端点 | 调整聊天颜色掩码范围、超时时间 |
 | `ow_color_fluent/core/prompts.py` | OCR/翻译 Prompt、消息体构造 | 补充 OW 俚语、优化翻译风格 |
 | `ow_color_fluent/services/api_client.py` | 截图、颜色掩码、OCR/翻译 HTTP | 并发策略、错误重试、响应解析 |
-| `ow_color_fluent/ui/overlay_window.py` | PyQt6 悬浮窗 GUI 与交互 | 拖拽缩放、锁定穿透、渲染逻辑 |
+| `ow_color_fluent/ui/overlay_window.py` | CustomTkinter 悬浮窗 GUI 与交互 | 多分辨率适配、拖拽缩放、锁定穿透、彩色文本 |
 | `ow_color_fluent/runtime/async_runtime.py` | 后台异步循环 | asyncio 与 UI 线程解耦 |
 | `ow_color_fluent/app.py` | 应用装配 | 启动流程、平台提示 |
 | `main.py` | 启动入口 | CLI 调起 GUI（通常无需改动） |
 | `local_api_keys.py` | 本地密钥 | 仅本机填写，勿提交 |
 | `img/font_color.png` | 颜色语义参考图 | 更新 OW 聊天配色对照 |
 
+#### Overlay 尺寸与分辨率（已实现）
+
+`ow_color_fluent/ui/overlay_window.py` 中 `_update_geometry_by_ratio()` 规则：
+
+- 窗口高度 `H = max(180, screen_height / 6)`，宽度 `W = H × 1.5`
+- 默认位置：屏幕左下角 `(x=20, y=screen_height - H - 20)`
+- 通过 `GetSystemMetrics` + DPI Awareness 获取真实分辨率
+- 字体与按钮尺寸随窗口高度等比缩放
+
 #### 开发说明（针对上述 TODO）
 
-**1) Qt 尺寸校准（OW 聊天框适配）**
-
-- 主要改动文件：`ow_color_fluent/ui/overlay_window.py`
-- 建议改动点：
-  - 默认窗口尺寸与位置：`resize(...)`、`move(...)`
-  - 最小窗口约束：`setMinimumSize(...)`
-  - 拖拽/缩放边界：`_current_capture_region()`、`_is_on_resize_handle(...)`
-- 验收标准：
-  - 在 `16:9` 与 `21:9` 分辨率下，Overlay 能快速贴合聊天框区域
-  - 缩放到聊天框常见尺寸时，识别区域不截断末行文本
-  - 锁定/解锁后尺寸与位置不漂移
-
-**2) 聊天颜色可配置（非默认主题支持）**
+**聊天颜色可配置（非默认主题支持）**
 
 - 主要改动文件：`ow_color_fluent/core/config.py`、`local_api_keys.py`（或新增专用颜色配置文件）、`ow_color_fluent/services/api_client.py`
 - 建议实现方式：
@@ -247,6 +258,8 @@ asyncio.run(smoke_test())
 | 翻译为空 | `DEEPSEEK_API_KEY`、网络代理、`prompts.py` 输出格式 |
 | 热键无效 | Windows 是否以管理员运行（`keyboard` 偶需）、快捷键冲突 |
 | 依赖导入失败 | 虚拟环境是否激活、`pip install -r requirements.txt` 是否成功 |
+| Overlay 无法穿透 | 是否在 Windows 运行、`pywin32` 是否安装、F9 是否已切换锁定模式 |
+| Docker 内无 GUI | 容器仅支持 API 测试，完整 Overlay 需在 Windows 宿主机运行（见 `DOCKER_README.md`） |
 
 ### 开发状态
 
@@ -255,7 +268,8 @@ asyncio.run(smoke_test())
 | `config.py` | ✅ 已完成 |
 | `prompts.py` | ✅ 已完成（可更新） |
 | `api_client.py` | ✅ 已完成 |
-| `main.py` | 🚧 进行中 |
+| `main.py` / `ow_color_fluent/app.py` | ✅ 已完成（CustomTkinter） |
+| `ow_color_fluent/ui/overlay_window.py` | ✅ 已完成（多分辨率 + 穿透） |
 
 ### 贡献与许可
 

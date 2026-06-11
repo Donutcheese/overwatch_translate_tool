@@ -1,4 +1,4 @@
-"""Async runtime wrapper for Qt apps."""
+"""Async runtime wrapper for GUI apps."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from typing import Any
 
 
 class AsyncRuntime:
-    """独立 asyncio 事件循环线程，避免阻塞 Qt UI 线程。"""
+    """独立 asyncio 事件循环线程，避免阻塞 GUI 主线程。"""
 
     def __init__(self) -> None:
         self._loop = asyncio.new_event_loop()

@@ -2,7 +2,7 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-# Install system dependencies
+# OpenCV 运行时依赖（headless API 测试）
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libgl1-mesa-glx \
     libglib2.0-0 \
@@ -12,17 +12,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements first for better caching
-COPY requirements.txt .
+# Docker 环境仅安装 API 层依赖（不含 pywin32 / CustomTkinter Overlay）
+COPY requirements-docker.txt .
 
-# Install Python dependencies
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirements-docker.txt
 
-# Copy application code
 COPY . .
 
-# Set environment
 ENV PYTHONUNBUFFERED=1
 
-# Default command - interactive shell
+# 默认进入交互式 Python；完整 GUI 请在 Windows 宿主机运行 python main.py
 CMD ["python"]

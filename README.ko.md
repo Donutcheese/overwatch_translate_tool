@@ -49,13 +49,15 @@
   <img src="img/image.png" alt="OW-Light-Translator 상세 시스템 흐름도" width="900">
 </p>
 
-> 위 그림: 전체 데이터 흐름 — `mss` 영역 캡처(메모리 Base64) → `COLOR_PALETTE` 멀티 채널 색상 마스크 → 智谱 GLM-OCR → DeepSeek 번역 → PyQt6 Overlay 의미 색상 렌더링.
+> 위 그림: 전체 데이터 흐름 — `mss` 영역 캡처(메모리 Base64) → `COLOR_PALETTE` 멀티 채널 색상 마스크 → 智谱 GLM-OCR → DeepSeek 번역 → CustomTkinter Overlay 의미 색상 렌더링.
 
 ### 프로젝트 구조
 
 ```
 overwatch_translate_tool/
-├── main.py            # PyQt6 메인, 핫키, async 이벤트 루프
+├── main.py            # 진입점 (ow_color_fluent.app.main 호출)
+├── ow_color_fluent/   # UI / API / runtime 패키지
+├── requirements-docker.txt  # Docker API 전용 의존성
 ├── api_client.py      # GLM-OCR / DeepSeek 비동기 HTTP 클라이언트
 ├── config.py          # DTO 및 환경 변수
 ├── prompts.py         # OW 슬랭 번역 System Prompt
@@ -89,7 +91,8 @@ overwatch_translate_tool/
 
 | 계층 | 라이브러리 / 서비스 | 버전 | 역할 |
 |------|---------------------|------|------|
-| UI | [PyQt6](https://www.riverbankcomputing.com/software/pyqt/) | `>=6.6.0` | 프레임리스 Overlay, 드래그, 클릭 통과, 색상 렌더링 |
+| UI | [CustomTkinter](https://github.com/TomSchimansky/CustomTkinter) | `>=5.2.2` | 프레임리스 투명 Overlay, 드래그, 색상 텍스트 |
+| Windows API | [pywin32](https://github.com/mhammond/pywin32) | `>=306` | DPI 인식, 마우스 클릭 통과 |
 | 캡처 | [mss](https://python-mss.readthedocs.io/) | `>=9.0.1` | 영역 스크린샷 (메모리 전용) |
 | 이미지 | [OpenCV](https://opencv.org/) | `>=4.10` | 색상 마스크, 모폴로지, PNG 메모리 인코딩 |
 | 수치 | [NumPy](https://numpy.org/) | `>=1.26` | 프레임·마스크 배열 연산 |
@@ -134,7 +137,8 @@ DEEPSEEK_API_KEY = "DeepSeek Key"
 | `config.py` | DTO, `COLOR_PALETTE` | 색상 마스크, 타임아웃 |
 | `prompts.py` | Prompt | 슬랭, 번역 톤 |
 | `api_client.py` | 캡처·OCR·번역 | 동시성, 재시도, 파싱 |
-| `main.py` | PyQt6 UI | Overlay UX |
+| `ow_color_fluent/ui/overlay_window.py` | CustomTkinter UI | 다해상도, 클릭 통과, 렌더링 |
+| `main.py` | 진입점 | 보통 변경 불필요 |
 | `local_api_keys.py` | 로컬 키 | 커밋 금지 |
 
 #### 기여 절차

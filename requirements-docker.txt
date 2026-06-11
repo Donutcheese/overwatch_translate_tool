@@ -1,0 +1,9 @@
+# OW-Light-Translator — Docker / Linux API 开发依赖
+# 不含 Windows 专用 UI 组件（customtkinter / pywin32 / keyboard）
+# 用于容器内 API 联调、单元测试，无法运行完整 Overlay GUI
+
+python-dotenv>=1.0.0
+httpx>=0.27.0
+mss>=9.0.1
+numpy>=1.26.0
+opencv-python>=4.10.0
