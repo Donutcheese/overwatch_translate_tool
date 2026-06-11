@@ -112,15 +112,20 @@ For contributors: environment setup, tech stack, and collaboration workflow.
 git clone https://github.com/<your-org>/overwatch_translate_tool.git
 cd overwatch_translate_tool
 
-python -m venv .venv
-.venv\Scripts\Activate.ps1          # Windows PowerShell
+python -m venv venv
+venv\Scripts\Activate.ps1          # Windows PowerShell
 
 pip install -U pip
 pip install -r requirements.txt
 
+# Or use setup script:
+# .\scripts\setup_venv.bat
+
 # Configure API keys (see below), then:
 python main.py
 ```
+
+> **Note:** The `venv/` folder is gitignored. Run `scripts/setup_venv.ps1` or `.bat` locally — do not commit the virtual environment.
 
 Default hotkeys: `F8` capture/OCR, `F9` toggle lock/click-through (override via `HOTKEY_CAPTURE` / `HOTKEY_TOGGLE_LOCK`). Run PowerShell as **admin** if global hotkeys fail.
 

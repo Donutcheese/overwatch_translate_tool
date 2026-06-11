@@ -4,6 +4,40 @@
 
 ---
 
+## 虚拟环境（venv）
+
+本项目使用标准库 `venv`，虚拟环境目录名为 **`venv/`**（已在 `.gitignore`，不会上传）。
+
+### Windows（推荐）
+
+```powershell
+# 克隆后，在项目根目录执行其一：
+
+# 双击
+scripts\setup_venv.bat
+
+# 或 PowerShell
+.\scripts\setup_venv.ps1
+
+# 激活
+.\venv\Scripts\Activate.ps1
+
+# 启动
+python main.py
+```
+
+### Linux / macOS
+
+```bash
+chmod +x scripts/setup_venv.sh
+./scripts/setup_venv.sh
+source venv/bin/activate
+```
+
+> Overlay GUI 完整功能仅 Windows 可用；Linux/macOS 脚本主要用于安装 API 依赖。
+
+---
+
 ## 快速开始
 
 ### Windows 用户

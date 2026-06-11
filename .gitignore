@@ -2,6 +2,10 @@
 __pycache__/
 *.py[cod]
 *.egg-info/
+dist/
+build/
+
+# 虚拟环境（本地创建，勿提交 — 使用 scripts/setup_venv.* 初始化）
 .venv/
 venv/
 .env
@@ -27,3 +31,5 @@ Desktop.ini
 # Screenshots (if saving locally)
 screenshots/
 *.png
+!img/**/*.png
+!img/**/*.ico

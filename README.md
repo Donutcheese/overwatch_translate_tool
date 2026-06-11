@@ -79,7 +79,15 @@ overwatch_translate_tool/
 ├── local_api_keys.py  # 本地 API Key（已 gitignore）
 ├── img/
 │   ├── image.png      # 详细系统流程图
-│   └── font_color.png # 聊天颜色语义参考图
+│   ├── font_color.png # 聊天颜色语义参考图
+│   ├── icon.png       # 应用图标源文件
+│   └── icon.ico       # Windows 窗口 / exe 图标
+├── scripts/               # venv 安装脚本（提交到 Git，见 scripts/README.md）
+│   ├── setup_venv.ps1
+│   ├── setup_venv.bat
+│   ├── setup_venv.sh
+│   └── activate_venv.ps1
+├── venv/                  # 本地虚拟环境（.gitignore，勿提交）
 ├── requirements.txt         # Windows 完整依赖（含 UI）
 ├── requirements-docker.txt  # Docker API 开发依赖（无 UI）
 ├── Dockerfile
@@ -129,18 +137,40 @@ overwatch_translate_tool/
 git clone https://github.com/<your-org>/overwatch_translate_tool.git
 cd overwatch_translate_tool
 
-# 2. 创建并激活虚拟环境（Windows PowerShell 示例）
-python -m venv .venv
-.venv\Scripts\Activate.ps1
-
-# 3. 安装依赖
-pip install -U pip
-pip install -r requirements.txt
-
+# 2. 创建并激活虚拟环境（Windows，推荐）
+#    方式 A — 一键脚本（推荐）
+.\scripts\setup_venv.bat
+# 或 PowerShell:
+#   .\scripts\setup_venv.ps1
+#
+#    方式 B — 手动
+# python -m venv venv
+# .\venv\Scripts\Activate.ps1
+#
+# 3. 若用手动方式，再安装依赖:
+# pip install -U pip
+# pip install -r requirements.txt
+#
 # 4. 配置 API Key（见下方「密钥配置」）
 # 5. 启动主程序
 python main.py
 ```
+
+首次克隆后若缺少 `img/icon.ico`，可运行：
+
+```powershell
+pip install Pillow
+python scripts/generate_icon.py
+```
+
+打包 exe（含 exe 文件图标）：
+
+```powershell
+.\scripts\build.bat
+# 输出: dist\OW-Color-Fluent-Translator.exe
+```
+
+> **说明**：`venv/` 目录已在 `.gitignore` 中，每位开发者本地自行创建，**不要**将虚拟环境提交到 Git。仓库仅提供 `scripts/setup_venv.ps1` / `.bat` / `.sh` 安装脚本。
 
 默认热键（可通过环境变量 `HOTKEY_CAPTURE` / `HOTKEY_TOGGLE_LOCK` 覆盖）：
 

@@ -19,6 +19,10 @@ def _show_startup_notice() -> None:
 
 
 def main() -> int:
+    if sys.platform.startswith("win"):
+        from .ui.app_icon import _set_windows_app_id
+
+        _set_windows_app_id()
     _show_startup_notice()
     window = OverlayWindow()
     window.mainloop()

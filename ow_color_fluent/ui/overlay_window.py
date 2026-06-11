@@ -16,6 +16,8 @@ import customtkinter as ctk
 from ..core.config import TransResult
 from ..runtime.async_runtime import AsyncRuntime
 from ..services.api_client import OWColorFluentApiClient, capture_region_to_base64
+from .app_icon import apply_app_icon
+from .win_acrylic import set_acrylic_blur
 
 try:
     import keyboard  # type: ignore
@@ -43,8 +45,24 @@ SWP_FRAMECHANGED = 0x0020
 
 MIN_HEIGHT = 180
 MIN_WIDTH = int(MIN_HEIGHT * 1.5)
-# 1080p 下悬浮窗高度为 MIN_HEIGHT，以此为字体与控件缩放基准
 BASE_REFERENCE_HEIGHT = MIN_HEIGHT
+
+# 字体基准（1080p + 窗口高度 180px 时约为下列 px）
+FONT_BASE_TITLE = 10
+FONT_BASE_MODE = 8
+FONT_BASE_REGION = 8
+FONT_BASE_BODY = 9
+FONT_BASE_BTN = 9
+FONT_SCALE_MIN = 0.68
+FONT_SCALE_MAX = 1.05
+
+# 毛玻璃面板自动隐藏（毫秒，锁定模式下）
+GLASS_AUTO_HIDE_MS = int(os.getenv("GLASS_AUTO_HIDE_MS", "12000"))
+
+# 视觉样式（glass 模式用 transparent 让 DWM 模糊透出）
+COLOR_CARD_SETUP = "#1E293B"
+COLOR_CARD_BORDER = "#64748B"
+COLOR_TEXTBOX_SETUP = "#0F172A"
 
 
 def _enable_dpi_awareness() -> None:
@@ -84,12 +102,15 @@ class OverlayWindow(ctk.CTk):
         self._resize_handle_size = 16
         self._font_scale = 1.0
         self._last_scaled_h = 0
+        self._visual_state = "setup"
+        self._glass_hide_job: str | None = None
 
         self.title("OW-Color-Fluent-Translator")
         self.overrideredirect(True)
         self.attributes("-topmost", True)
         self.configure(fg_color=TRANSPARENT_COLOR)
         self.attributes("-transparentcolor", TRANSPARENT_COLOR)
+        apply_app_icon(self)
 
         self._min_w = MIN_WIDTH
         self._min_h = MIN_HEIGHT
@@ -103,9 +124,8 @@ class OverlayWindow(ctk.CTk):
         self._apply_lock_mode(False)
         self._update_region_label()
         self._set_status("待命", "#6EE7B7")
-
-        self._insert_colored_text("等待识别...", newline=True)
-        self._insert_colored_text("使用热键触发识别。", color="#94A3B8")
+        self.result_view.delete("1.0", "end")
+        self._insert_colored_text("F8 识别 · F9 锁定后游戏中透明", color="#94A3B8")
 
     def _get_screen_size(self) -> tuple[int, int]:
         if sys.platform.startswith("win"):
@@ -135,17 +155,35 @@ class OverlayWindow(ctk.CTk):
         self._set_font_scale_from_height(height)
 
     def _set_font_scale_from_height(self, height: int) -> None:
-        self._font_scale = max(1.0, height / BASE_REFERENCE_HEIGHT)
-        self._resize_handle_size = max(16, int(height * 0.09))
+        self._font_scale = max(
+            FONT_SCALE_MIN,
+            min(FONT_SCALE_MAX, height / BASE_REFERENCE_HEIGHT),
+        )
+        self._resize_handle_size = max(12, int(height * 0.07))
         self._last_scaled_h = height
 
     def _font_size(self, base: int) -> int:
-        return max(9, int(round(base * self._font_scale)))
+        return max(8, int(round(base * self._font_scale)))
 
     def _scaled_px(self, base: int) -> int:
         return max(1, int(round(base * self._font_scale)))
 
-    def _scaled_font(self, base_size: int, weight: str = "normal") -> tkfont.Font:
+    def _refresh_font_scale_from_window(self) -> None:
+        height = max(MIN_HEIGHT, int(self.winfo_height()))
+        if abs(height - self._last_scaled_h) < 2:
+            return
+        self._set_font_scale_from_height(height)
+        self._apply_ui_scale()
+
+    def _scaled_font(self, base_size: int, weight: str = "normal") -> ctk.CTkFont:
+        return ctk.CTkFont(
+            family="Segoe UI",
+            size=self._font_size(base_size),
+            weight=weight,
+        )
+
+    def _textbox_tag_font(self, base_size: int, weight: str = "normal") -> tkfont.Font:
+        """CTkTextbox 内部 tkinter Text 的 tag 仍使用 tkinter.font.Font。"""
         return tkfont.Font(
             family="Segoe UI",
             size=self._font_size(base_size),
@@ -153,92 +191,93 @@ class OverlayWindow(ctk.CTk):
         )
 
     def _apply_ui_scale(self) -> None:
-        dot_w = self._scaled_px(14)
-        btn_w = self._scaled_px(90)
-        btn_h = self._scaled_px(28)
-        close_sz = self._scaled_px(28)
+        dot_w = self._scaled_px(10)
+        btn_w = self._scaled_px(72)
+        btn_h = self._scaled_px(24)
+        close_sz = self._scaled_px(24)
 
-        self.dot_status.configure(width=dot_w, font=self._scaled_font(14))
-        self.title_label.configure(font=self._scaled_font(14, "bold"))
-        self.mode_label.configure(font=self._scaled_font(12))
+        self.dot_status.configure(width=dot_w, font=self._scaled_font(FONT_BASE_TITLE))
+        self.title_label.configure(font=self._scaled_font(FONT_BASE_TITLE, "bold"))
+        self.mode_label.configure(font=self._scaled_font(FONT_BASE_MODE))
         self.capture_btn.configure(
             width=btn_w,
             height=btn_h,
-            font=self._scaled_font(12),
+            font=self._scaled_font(FONT_BASE_BTN),
         )
         self.lock_btn.configure(
             width=btn_w,
             height=btn_h,
-            font=self._scaled_font(12),
+            font=self._scaled_font(FONT_BASE_BTN),
         )
         self.close_btn.configure(
             width=close_sz,
             height=close_sz,
-            font=self._scaled_font(14, "bold"),
+            font=self._scaled_font(FONT_BASE_TITLE, "bold"),
         )
-        self.region_label.configure(font=self._scaled_font(12))
-        self.result_view.configure(font=self._scaled_font(13))
+        self.region_label.configure(font=self._scaled_font(FONT_BASE_REGION))
+        self.result_view.configure(font=self._scaled_font(FONT_BASE_BODY))
         self.resize_tip.configure(
             width=self._resize_handle_size,
             height=self._resize_handle_size,
-            font=self._scaled_font(12),
+            font=self._scaled_font(FONT_BASE_REGION),
         )
 
     def _maybe_apply_ui_scale(self) -> None:
-        height = int(self.winfo_height())
-        if height < MIN_HEIGHT:
+        if self._visual_state == "hidden":
             return
-        if abs(height - self._last_scaled_h) < 2:
-            return
-        self._last_scaled_h = height
-        self._set_font_scale_from_height(height)
-        self._apply_ui_scale()
+        self._refresh_font_scale_from_window()
 
     def _build_ui(self) -> None:
         self.card = ctk.CTkFrame(
             self,
-            fg_color="#0F172A",
-            corner_radius=12,
+            fg_color=COLOR_CARD_SETUP,
+            corner_radius=10,
             border_width=1,
-            border_color="#94A3B8",
+            border_color=COLOR_CARD_BORDER,
         )
-        self.card.pack(fill="both", expand=True, padx=10, pady=10)
+        self.card.pack(fill="both", expand=True, padx=8, pady=8)
+        self.card.grid_columnconfigure(0, weight=1)
+        self.card.grid_rowconfigure(2, weight=1)
 
         self.header = ctk.CTkFrame(self.card, fg_color="transparent")
-        self.header.pack(fill="x", padx=4, pady=(4, 0))
+        self.header.grid(row=0, column=0, sticky="ew", padx=4, pady=(4, 0))
+        self.header.grid_columnconfigure(1, weight=1)
 
         self.dot_status = ctk.CTkLabel(
             self.header,
             text="●",
-            width=self._scaled_px(14),
-            font=self._scaled_font(14),
+            width=self._scaled_px(10),
+            font=self._scaled_font(FONT_BASE_TITLE),
             text_color="#6EE7B7",
         )
-        self.dot_status.pack(side="left", padx=(0, 4))
+        self.dot_status.grid(row=0, column=0, padx=(0, 4))
 
         self.title_label = ctk.CTkLabel(
             self.header,
-            text="OW Color Fluent Translator",
-            font=self._scaled_font(14, "bold"),
+            text="OW Translator",
+            font=self._scaled_font(FONT_BASE_TITLE, "bold"),
             text_color="#E2E8F0",
             anchor="w",
         )
-        self.title_label.pack(side="left", fill="x", expand=True)
+        self.title_label.grid(row=0, column=1, sticky="ew")
+
+        self.header_actions = ctk.CTkFrame(self.header, fg_color="transparent")
+        self.header_actions.grid(row=0, column=2, sticky="e")
 
         self.mode_label = ctk.CTkLabel(
-            self.header,
+            self.header_actions,
             text="编辑模式",
-            font=self._scaled_font(12),
+            font=self._scaled_font(FONT_BASE_MODE),
             text_color="#93C5FD",
         )
-        self.mode_label.pack(side="left", padx=(8, 8))
+        self.mode_label.pack(side="left", padx=(0, 6))
 
         self.capture_btn = ctk.CTkButton(
-            self.header,
+            self.header_actions,
             text=f"识别({HOTKEY_CAPTURE.upper()})",
-            width=self._scaled_px(90),
-            height=self._scaled_px(28),
-            font=self._scaled_font(12),
+            width=self._scaled_px(72),
+            height=self._scaled_px(24),
+            font=self._scaled_font(FONT_BASE_BTN),
             fg_color="#2563EB",
             hover_color="#1D4ED8",
             command=self.trigger_capture,
@@ -246,11 +285,11 @@ class OverlayWindow(ctk.CTk):
         self.capture_btn.pack(side="left", padx=(0, 4))
 
         self.lock_btn = ctk.CTkButton(
-            self.header,
+            self.header_actions,
             text=f"锁定({HOTKEY_TOGGLE_LOCK.upper()})",
-            width=self._scaled_px(90),
-            height=self._scaled_px(28),
-            font=self._scaled_font(12),
+            width=self._scaled_px(72),
+            height=self._scaled_px(24),
+            font=self._scaled_font(FONT_BASE_BTN),
             fg_color="#334155",
             hover_color="#475569",
             command=self.toggle_lock_mode,
@@ -258,11 +297,11 @@ class OverlayWindow(ctk.CTk):
         self.lock_btn.pack(side="left", padx=(0, 4))
 
         self.close_btn = ctk.CTkButton(
-            self.header,
+            self.header_actions,
             text="×",
-            width=self._scaled_px(28),
-            height=self._scaled_px(28),
-            font=self._scaled_font(14, "bold"),
+            width=self._scaled_px(24),
+            height=self._scaled_px(24),
+            font=self._scaled_font(FONT_BASE_TITLE, "bold"),
             fg_color="#7F1D1D",
             hover_color="#991B1B",
             command=self._on_close,
@@ -272,39 +311,44 @@ class OverlayWindow(ctk.CTk):
         self.region_label = ctk.CTkLabel(
             self.card,
             text="",
-            font=self._scaled_font(12),
+            font=self._scaled_font(FONT_BASE_REGION),
             text_color="#94A3B8",
             anchor="w",
         )
-        self.region_label.pack(fill="x", padx=8, pady=(6, 4))
+        self.region_label.grid(row=1, column=0, sticky="ew", padx=8, pady=(4, 2))
 
         self.result_view = ctk.CTkTextbox(
             self.card,
-            font=self._scaled_font(13),
-            fg_color="#020617",
+            font=self._scaled_font(FONT_BASE_BODY),
+            fg_color=COLOR_TEXTBOX_SETUP,
             border_color="#475569",
             border_width=1,
             text_color="#E2E8F0",
             wrap="word",
             activate_scrollbars=True,
         )
-        self.result_view.pack(fill="both", expand=True, padx=8, pady=(0, 4))
+        self.result_view.grid(row=2, column=0, sticky="nsew", padx=8, pady=(0, 2))
+
+        self.footer = ctk.CTkFrame(self.card, fg_color="transparent", height=self._scaled_px(18))
+        self.footer.grid(row=3, column=0, sticky="ew", padx=4, pady=(0, 2))
+        self.footer.grid_columnconfigure(0, weight=1)
 
         self.resize_tip = ctk.CTkLabel(
-            self.card,
+            self.footer,
             text="◢",
-            font=self._scaled_font(12),
-            text_color="#94A3B8",
+            font=self._scaled_font(FONT_BASE_REGION),
+            text_color="#64748B",
             width=self._resize_handle_size,
             height=self._resize_handle_size,
         )
-        self.resize_tip.place(relx=1.0, rely=1.0, anchor="se", x=-8, y=-8)
+        self.resize_tip.grid(row=0, column=1, sticky="se", padx=(0, 2))
 
         drag_widgets = (
             self.header,
             self.dot_status,
             self.title_label,
             self.mode_label,
+            self.region_label,
         )
         for widget in drag_widgets:
             widget.bind("<Button-1>", self._on_drag_start, add="+")
@@ -364,6 +408,8 @@ class OverlayWindow(ctk.CTk):
             pass
 
     def _set_click_through(self, enabled: bool) -> None:
+        if self._visual_state == "glass":
+            enabled = False
         if not sys.platform.startswith("win"):
             return
         try:
@@ -379,16 +425,110 @@ class OverlayWindow(ctk.CTk):
         except Exception:
             pass
 
+    def _cancel_glass_hide(self) -> None:
+        if self._glass_hide_job:
+            try:
+                self.after_cancel(self._glass_hide_job)
+            except Exception:
+                pass
+            self._glass_hide_job = None
+
+    def _schedule_glass_hide(self) -> None:
+        self._cancel_glass_hide()
+        if self._locked and GLASS_AUTO_HIDE_MS > 0:
+            self._glass_hide_job = self.after(GLASS_AUTO_HIDE_MS, self._hide_glass_panel)
+
+    def _hide_glass_panel(self) -> None:
+        self._glass_hide_job = None
+        if self._locked and self._visual_state == "glass":
+            self._set_visual_state("hidden")
+
+    def _apply_acrylic(self, enabled: bool) -> None:
+        if not sys.platform.startswith("win"):
+            return
+
+        def _run() -> None:
+            self.update_idletasks()
+            set_acrylic_blur(self._get_hwnd(), enabled)
+
+        self.after(30, _run)
+
+    def _show_setup_widgets(self) -> None:
+        self.card.grid_rowconfigure(0, weight=0)
+        self.card.grid_rowconfigure(2, weight=1)
+        self.header.grid(row=0, column=0, sticky="ew", padx=4, pady=(4, 0))
+        self.region_label.grid(row=1, column=0, sticky="ew", padx=8, pady=(4, 2))
+        self.result_view.grid(row=2, column=0, sticky="nsew", padx=8, pady=(0, 2))
+        if not self._locked:
+            self.footer.grid(row=3, column=0, sticky="ew", padx=4, pady=(0, 2))
+
+    def _hide_setup_widgets(self) -> None:
+        self.header.grid_remove()
+        self.region_label.grid_remove()
+        self.footer.grid_remove()
+
+    def _set_visual_state(self, state: str) -> None:
+        """setup=编辑对齐 | hidden=游戏中全透明 | glass=F8 后毛玻璃译文。"""
+        self._visual_state = state
+        self._cancel_glass_hide()
+
+        if state == "hidden":
+            self.card.configure(fg_color=TRANSPARENT_COLOR, border_width=0)
+            self.result_view.configure(fg_color=TRANSPARENT_COLOR, border_width=0)
+            self._hide_setup_widgets()
+            self.result_view.grid_remove()
+            self._apply_acrylic(False)
+            if self._locked:
+                self._set_click_through(True)
+            return
+
+        if state == "setup":
+            self.card.configure(
+                fg_color=COLOR_CARD_SETUP,
+                border_width=1,
+                border_color=COLOR_CARD_BORDER,
+            )
+            self.result_view.configure(
+                fg_color=COLOR_TEXTBOX_SETUP,
+                border_width=1,
+                border_color="#475569",
+            )
+            self._show_setup_widgets()
+            self._apply_acrylic(False)
+            self._set_click_through(False)
+            self._refresh_font_scale_from_window()
+            return
+
+        if state == "glass":
+            self.card.configure(fg_color="transparent", border_width=1, border_color="#94A3B8")
+            self.result_view.configure(fg_color="transparent", border_width=0)
+            self._hide_setup_widgets()
+            self.result_view.grid(row=0, column=0, sticky="nsew", padx=12, pady=12)
+            self.card.grid_rowconfigure(0, weight=1)
+            self._apply_acrylic(True)
+            self._set_click_through(False)
+            self._refresh_font_scale_from_window()
+            self._schedule_glass_hide()
+
     def trigger_capture(self) -> None:
         if self._busy:
             return
         region = self._current_capture_region()
         if region["width"] < 80 or region["height"] < 60:
+            if self._locked:
+                self._set_visual_state("glass")
             self._append_message("截图区域过小，请扩大窗口。", "#F59E0B")
             return
 
         self._busy = True
         self._set_status("识别中", "#60A5FA")
+
+        if self._locked:
+            self._set_visual_state("glass")
+            self.result_view.delete("1.0", "end")
+            self._insert_colored_text("识别中...", color="#60A5FA", newline=False)
+        else:
+            self._set_visual_state("setup")
 
         self.withdraw()
         self.after(90, lambda: self._launch_pipeline(region))
@@ -398,6 +538,10 @@ class OverlayWindow(ctk.CTk):
         self.deiconify()
         self.attributes("-topmost", True)
         self.lift()
+        if self._locked:
+            self._set_visual_state("glass")
+        else:
+            self._set_visual_state("setup")
 
     def _launch_pipeline(self, region: dict[str, int]) -> None:
         future = self._runtime.submit(self._pipeline(region))
@@ -419,6 +563,11 @@ class OverlayWindow(ctk.CTk):
 
     def _handle_pipeline_done(self, payload: object, error: str) -> None:
         self._busy = False
+        if self._locked:
+            self._set_visual_state("glass")
+        elif error or not isinstance(payload, dict):
+            self._set_visual_state("setup")
+
         if error:
             self._set_status("失败", "#F87171")
             self._append_message(f"识别失败：{error}", "#F87171")
@@ -438,6 +587,11 @@ class OverlayWindow(ctk.CTk):
             self._set_status("无结果", "#F59E0B")
             self._render_ocr_fallback(ocr_results)
 
+        if self._locked:
+            self._schedule_glass_hide()
+        else:
+            self._set_visual_state("setup")
+
     def _insert_colored_text(
         self,
         text: str,
@@ -448,7 +602,7 @@ class OverlayWindow(ctk.CTk):
         self._tag_counter += 1
         tag_name = f"color_tag_{self._tag_counter}"
         weight = "bold" if bold else "normal"
-        font = self._scaled_font(13, weight)
+        font = self._textbox_tag_font(FONT_BASE_BODY, weight)
         self.result_view.tag_config(tag_name, foreground=color)
         try:
             self.result_view._textbox.tag_config(tag_name, foreground=color, font=font)
@@ -488,13 +642,11 @@ class OverlayWindow(ctk.CTk):
         if locked:
             self.mode_label.configure(text="锁定穿透")
             self.lock_btn.configure(text=f"解锁({HOTKEY_TOGGLE_LOCK.upper()})")
-            self.resize_tip.place_forget()
-            self._set_click_through(True)
+            self._set_visual_state("hidden")
         else:
             self.mode_label.configure(text="编辑模式")
             self.lock_btn.configure(text=f"锁定({HOTKEY_TOGGLE_LOCK.upper()})")
-            self.resize_tip.place(relx=1.0, rely=1.0, anchor="se", x=-8, y=-8)
-            self._set_click_through(False)
+            self._set_visual_state("setup")
         self._update_region_label()
 
     def _on_drag_start(self, event: Any) -> None:
@@ -563,6 +715,8 @@ class OverlayWindow(ctk.CTk):
         self._insert_colored_text(safe, color=color)
 
     def _update_region_label(self) -> None:
+        if self._visual_state != "setup":
+            return
         region = self._current_capture_region()
         lock_text = "锁定穿透" if self._locked else "可拖拽/可缩放"
         self.region_label.configure(
