@@ -1,6 +1,12 @@
 # OW-Light-Translator
 
-> 轻量级 · 实时 · 反作弊友好 · 守望先锋屏幕翻译 Overlay
+<p align="center">
+  <img src="img/icon.png" alt="OW-Light-Translator 应用图标" width="128">
+</p>
+
+<p align="center">
+  <strong>轻量级 · 实时 · 反作弊友好 · 守望先锋屏幕翻译 Overlay</strong>
+</p>
 
 **Language / 语言 / 言語 / 언어：** **中文** | [English](README.en.md) | [日本語](README.ja.md) | [한국어](README.ko.md)
 
@@ -42,12 +48,25 @@
 
 | 特性 | 说明 |
 |------|------|
-| 双模式 UI | **编辑模式**：可拖拽、缩放选区；**锁定模式**：无边框、透明、鼠标穿透（`pywin32`）、置顶 |
+| 三态 Overlay | **编辑模式**：对齐聊天框；**锁定模式**：全透明 + 鼠标穿透；**F8 译文**：Win11 毛玻璃浮层 |
 | 多分辨率适配 | 按屏幕高度 `1/6` 自动缩放窗口与字体，1K / 2K / 4K 左下角比例一致 |
 | 零磁盘 I/O | 截图在内存中直接转 Base64，不写临时文件 |
 | 多通道 OCR | 按颜色掩码分通道识别，降低复杂背景干扰 |
 | 异步流水线 | UI / 热键不阻塞；截图 → OCR → 翻译在后台 `asyncio` worker 中完成 |
 | OW 俚语专家 | 内置 DeepSeek System Prompt，覆盖 C9、Diff、英雄缩写、韩日常用 callout |
+| 应用图标 | `img/icon.png` 源图 → `img/icon.ico`，用于窗口、任务栏与 PyInstaller 打包 exe |
+
+### Overlay 使用流程
+
+| 步骤 | 操作 | 界面表现 |
+|------|------|----------|
+| 1 | 启动 `python main.py` | **编辑模式**：半透明面板，拖拽对齐 OW 聊天区域 |
+| 2 | `F9` 锁定 | **全透明**，鼠标穿透，游戏中不可见 |
+| 3 | `F8` 识别 | **毛玻璃浮层**显示译文（Win11 DWM Acrylic / Mica） |
+| 4 | 约 12 秒后 | 自动隐藏（`GLASS_AUTO_HIDE_MS` 可配置） |
+| 5 | 再按 `F9` | 回到编辑模式调整位置 |
+
+> **编辑模式**下为实心/半透明面板，**不会**显示毛玻璃——这是正常现象，用于对齐选区。
 
 ### 工作流程
 
@@ -134,7 +153,7 @@ overwatch_translate_tool/
 
 ```bash
 # 1. 克隆仓库
-git clone https://github.com/<your-org>/overwatch_translate_tool.git
+git clone https://github.com/Donutcheese/overwatch_translate_tool.git
 cd overwatch_translate_tool
 
 # 2. 创建并激活虚拟环境（Windows，推荐）
@@ -212,6 +231,8 @@ HTTP_TIMEOUT_SEC=30
 | `ow_color_fluent/app.py` | 应用装配 | 启动流程、平台提示 |
 | `main.py` | 启动入口 | CLI 调起 GUI（通常无需改动） |
 | `local_api_keys.py` | 本地密钥 | 仅本机填写，勿提交 |
+| `img/icon.png` | 应用图标源文件（PNG） | 更新品牌图标后运行 `scripts/generate_icon.py` |
+| `img/icon.ico` | Windows 窗口 / exe 图标 | 由 `icon.png` 自动生成，也可直接替换 |
 | `img/font_color.png` | 颜色语义参考图 | 更新 OW 聊天配色对照 |
 
 #### Overlay 尺寸与分辨率（已实现）

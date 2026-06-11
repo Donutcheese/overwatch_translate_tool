@@ -1,6 +1,12 @@
 # OW-Light-Translator
 
-> Lightweight · Real-time · Anti-cheat-friendly · Overwatch screen translation overlay
+<p align="center">
+  <img src="img/icon.png" alt="OW-Light-Translator app icon" width="128">
+</p>
+
+<p align="center">
+  <strong>Lightweight · Real-time · Anti-cheat-friendly · Overwatch screen translation overlay</strong>
+</p>
 
 **Language / 语言 / 言語 / 언어：** [中文](README.md) | **English** | [日本語](README.ja.md) | [한국어](README.ko.md)
 

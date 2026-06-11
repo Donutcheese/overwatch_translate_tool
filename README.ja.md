@@ -1,6 +1,12 @@
 # OW-Light-Translator
 
-> 軽量 · リアルタイム · アンチチート配慮 · オーバーウォッチ画面翻訳 Overlay
+<p align="center">
+  <img src="img/icon.png" alt="OW-Light-Translator アプリアイコン" width="128">
+</p>
+
+<p align="center">
+  <strong>軽量 · リアルタイム · アンチチート配慮 · オーバーウォッチ画面翻訳 Overlay</strong>
+</p>
 
 **Language / 语言 / 言語 / 언어：** [中文](README.md) | [English](README.en.md) | **日本語** | [한국어](README.ko.md)
 

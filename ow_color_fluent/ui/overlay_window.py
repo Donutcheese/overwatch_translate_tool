@@ -13,7 +13,7 @@ from typing import Any
 
 import customtkinter as ctk
 
-from ..core.config import TransResult
+from ..core.config import GLM_API_KEY, TransResult
 from ..runtime.async_runtime import AsyncRuntime
 from ..services.api_client import OWColorFluentApiClient, capture_region_to_base64
 from .app_icon import apply_app_icon
@@ -63,6 +63,8 @@ GLASS_AUTO_HIDE_MS = int(os.getenv("GLASS_AUTO_HIDE_MS", "12000"))
 COLOR_CARD_SETUP = "#1E293B"
 COLOR_CARD_BORDER = "#64748B"
 COLOR_TEXTBOX_SETUP = "#0F172A"
+# 毛玻璃模式下根窗口底色（非 colorkey，供 DWM 合成）
+GLASS_ROOT_BG = "#0A0E17"
 
 
 def _enable_dpi_awareness() -> None:
@@ -101,6 +103,7 @@ class OverlayWindow(ctk.CTk):
         self._tag_counter = 0
         self._resize_handle_size = 16
         self._font_scale = 1.0
+        self._baseline_font_scale = 1.0
         self._last_scaled_h = 0
         self._visual_state = "setup"
         self._glass_hide_job: str | None = None
@@ -125,7 +128,14 @@ class OverlayWindow(ctk.CTk):
         self._update_region_label()
         self._set_status("待命", "#6EE7B7")
         self.result_view.delete("1.0", "end")
-        self._insert_colored_text("F8 识别 · F9 锁定后游戏中透明", color="#94A3B8")
+        if not GLM_API_KEY.strip():
+            self._insert_colored_text(
+                "GLM_API_KEY 未配置：请在项目根目录创建 local_api_keys.py",
+                color="#F59E0B",
+            )
+            self._insert_colored_text("示例：GLM_API_KEY = \"你的智谱Key\"", color="#94A3B8")
+        else:
+            self._insert_colored_text("F8 识别 · F9 锁定后游戏中透明", color="#94A3B8")
 
     def _get_screen_size(self) -> tuple[int, int]:
         if sys.platform.startswith("win"):
@@ -147,20 +157,27 @@ class OverlayWindow(ctk.CTk):
         y = screen_h - height - 20
         self._set_font_scale_from_height(height)
         self.geometry(f"{width}x{height}+{x}+{y}")
+        self._capture_baseline_font_scale(height)
         self.update_idletasks()
 
     def _init_font_scale_from_screen(self) -> None:
         _, screen_h = self._get_screen_size()
         height = max(MIN_HEIGHT, int(screen_h / 6))
-        self._set_font_scale_from_height(height)
+        self._capture_baseline_font_scale(height)
 
     def _set_font_scale_from_height(self, height: int) -> None:
+        ratio = height / BASE_REFERENCE_HEIGHT
         self._font_scale = max(
             FONT_SCALE_MIN,
-            min(FONT_SCALE_MAX, height / BASE_REFERENCE_HEIGHT),
+            min(FONT_SCALE_MAX, ratio),
         )
         self._resize_handle_size = max(12, int(height * 0.07))
         self._last_scaled_h = height
+
+    def _capture_baseline_font_scale(self, height: int) -> None:
+        """记录启动时屏幕比例字号；手动拉大窗口不再放大字体。"""
+        self._set_font_scale_from_height(height)
+        self._baseline_font_scale = self._font_scale
 
     def _font_size(self, base: int) -> int:
         return max(8, int(round(base * self._font_scale)))
@@ -172,7 +189,13 @@ class OverlayWindow(ctk.CTk):
         height = max(MIN_HEIGHT, int(self.winfo_height()))
         if abs(height - self._last_scaled_h) < 2:
             return
-        self._set_font_scale_from_height(height)
+        ratio = height / BASE_REFERENCE_HEIGHT
+        self._font_scale = max(
+            FONT_SCALE_MIN,
+            min(self._baseline_font_scale, ratio),
+        )
+        self._resize_handle_size = max(12, int(height * 0.07))
+        self._last_scaled_h = height
         self._apply_ui_scale()
 
     def _scaled_font(self, base_size: int, weight: str = "normal") -> ctk.CTkFont:
@@ -443,6 +466,18 @@ class OverlayWindow(ctk.CTk):
         if self._locked and self._visual_state == "glass":
             self._set_visual_state("hidden")
 
+    def _set_root_colorkey(self, enabled: bool) -> None:
+        """colorkey 透明与 DWM 毛玻璃互斥；glass 模式必须关闭 colorkey。"""
+        if enabled:
+            self.configure(fg_color=TRANSPARENT_COLOR)
+            self.attributes("-transparentcolor", TRANSPARENT_COLOR)
+        else:
+            try:
+                self.attributes("-transparentcolor", "")
+            except Exception:
+                pass
+            self.configure(fg_color=GLASS_ROOT_BG)
+
     def _apply_acrylic(self, enabled: bool) -> None:
         if not sys.platform.startswith("win"):
             return
@@ -451,7 +486,7 @@ class OverlayWindow(ctk.CTk):
             self.update_idletasks()
             set_acrylic_blur(self._get_hwnd(), enabled)
 
-        self.after(30, _run)
+        self.after(50, _run)
 
     def _show_setup_widgets(self) -> None:
         self.card.grid_rowconfigure(0, weight=0)
@@ -473,6 +508,7 @@ class OverlayWindow(ctk.CTk):
         self._cancel_glass_hide()
 
         if state == "hidden":
+            self._set_root_colorkey(True)
             self.card.configure(fg_color=TRANSPARENT_COLOR, border_width=0)
             self.result_view.configure(fg_color=TRANSPARENT_COLOR, border_width=0)
             self._hide_setup_widgets()
@@ -483,6 +519,7 @@ class OverlayWindow(ctk.CTk):
             return
 
         if state == "setup":
+            self._set_root_colorkey(True)
             self.card.configure(
                 fg_color=COLOR_CARD_SETUP,
                 border_width=1,
@@ -500,6 +537,7 @@ class OverlayWindow(ctk.CTk):
             return
 
         if state == "glass":
+            self._set_root_colorkey(False)
             self.card.configure(fg_color="transparent", border_width=1, border_color="#94A3B8")
             self.result_view.configure(fg_color="transparent", border_width=0)
             self._hide_setup_widgets()
@@ -629,6 +667,22 @@ class OverlayWindow(ctk.CTk):
         if not ocr_results:
             self._insert_colored_text("无可用 OCR 结果。")
             return
+
+        messages: list[str] = []
+        for item in ocr_results:
+            msg = getattr(item, "error_msg", None) or "无文本输出"
+            messages.append(str(msg))
+
+        unique = list(dict.fromkeys(messages))
+        if len(unique) == 1:
+            self._insert_colored_text(unique[0], color="#F59E0B")
+            if "GLM_API_KEY" in unique[0]:
+                self._insert_colored_text(
+                    "编辑 local_api_keys.py 后重启程序。",
+                    color="#94A3B8",
+                )
+            return
+
         for item in ocr_results:
             label = getattr(getattr(item, "color_tag", None), "label", "Unknown")
             msg = getattr(item, "error_msg", None) or "无文本输出"

@@ -1,6 +1,12 @@
 # OW-Light-Translator
 
-> 경량 · 실시간 · 안티치트 고려 · 오버워치 화면 번역 Overlay
+<p align="center">
+  <img src="img/icon.png" alt="OW-Light-Translator 앱 아이콘" width="128">
+</p>
+
+<p align="center">
+  <strong>경량 · 실시간 · 안티치트 고려 · 오버워치 화면 번역 Overlay</strong>
+</p>
 
 **Language / 语言 / 言語 / 언어：** [中文](README.md) | [English](README.en.md) | [日本語](README.ja.md) | **한국어**
 
