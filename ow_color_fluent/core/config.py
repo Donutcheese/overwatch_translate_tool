@@ -19,7 +19,7 @@ load_dotenv()
 
 # API 与模型配置（后续 `api_client.py` 直接复用）
 GLM_OCR_URL: str = os.getenv(
-    "GLM_OCR_URL", "https://open.bigmodel.cn/api/paas/v4/chat/completions"
+    "GLM_OCR_URL", "https://open.bigmodel.cn/api/paas/v4/layout_parsing"
 )
 GLM_OCR_MODEL: str = os.getenv("GLM_OCR_MODEL", "glm-ocr")
 GLM_API_KEY: str = (FILE_GLM_API_KEY or os.getenv("GLM_API_KEY", "")).strip()
@@ -30,7 +30,13 @@ DEEPSEEK_URL: str = os.getenv(
 DEEPSEEK_MODEL: str = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
 DEEPSEEK_API_KEY: str = (FILE_DEEPSEEK_API_KEY or os.getenv("DEEPSEEK_API_KEY", "")).strip()
 
-HTTP_TIMEOUT_SEC: float = float(os.getenv("HTTP_TIMEOUT_SEC", "30"))
+HTTP_TIMEOUT_SEC: float = float(os.getenv("HTTP_TIMEOUT_SEC", "18"))
+OCR_MAX_CONCURRENT: int = max(1, int(os.getenv("OCR_MAX_CONCURRENT", "3")))
+OCR_CHANNELS: tuple[str, ...] = tuple(
+    label.strip()
+    for label in os.getenv("OCR_CHANNELS", "Friendly,Group,Alert").split(",")
+    if label.strip()
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -103,4 +109,3 @@ COLOR_PALETTE: List[ColorTag] = [
 # TODO(#4): 建议新增 color_palette.json 或环境变量覆盖，并在配置非法时回退默认值。
 # 便于按 label O(1) 查找颜色标签
 COLOR_TAG_MAP: Dict[str, ColorTag] = {tag.label: tag for tag in COLOR_PALETTE}
-

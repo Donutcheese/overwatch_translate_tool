@@ -23,12 +23,18 @@ from ..core.config import (
     GLM_OCR_MODEL,
     GLM_OCR_URL,
     HTTP_TIMEOUT_SEC,
+    OCR_CHANNELS,
+    OCR_MAX_CONCURRENT,
     CaptureData,
     ColorTag,
     OCRResult,
     TransResult,
 )
-from ..core.prompts import build_ocr_messages, build_translation_messages
+from ..core.prompts import build_translation_messages
+
+
+_TRANSLATION_CACHE_MAX = 256
+_translation_cache: dict[tuple[tuple[str, str], ...], list[TransResult]] = {}
 
 
 def capture_region_to_base64(region: dict[str, int]) -> CaptureData:
@@ -68,6 +74,24 @@ def encode_bgr_image_to_base64(image_bgr: np.ndarray) -> str:
     return base64.b64encode(encoded.tobytes()).decode("utf-8")
 
 
+def encode_bgr_image_to_jpeg_data_uri(
+    image_bgr: np.ndarray, *, quality: int = 90
+) -> str:
+    """将 BGR 图像编码为 GLM-OCR 接受的 JPEG Data URI。"""
+    ok, encoded = cv2.imencode(
+        ".jpg", image_bgr, [int(cv2.IMWRITE_JPEG_QUALITY), quality]
+    )
+    if not ok:
+        raise RuntimeError("图像编码失败：无法将 BGR 图编码为 JPEG。")
+    b64 = base64.b64encode(encoded.tobytes()).decode("utf-8")
+    return f"data:image/jpeg;base64,{b64}"
+
+
+def _mask_has_foreground(masked_gray: np.ndarray, *, min_pixels: int = 16) -> bool:
+    """掩码图中是否存在足够的前景像素，避免向 OCR 发送空白图。"""
+    return int(np.count_nonzero(masked_gray < 250)) >= min_pixels
+
+
 def build_color_mask_image(image_bgr: np.ndarray, color_tag: ColorTag) -> np.ndarray:
     """对输入图按 RGB 范围构建二值掩码，并返回 OCR 友好的灰度图。"""
     image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
@@ -105,6 +129,46 @@ def _extract_chat_content(data: dict[str, Any]) -> str:
         return ""
     message = choices[0].get("message", {})
     return _extract_message_text(message.get("content"))
+
+
+def _extract_layout_parsing_text(data: dict[str, Any]) -> str:
+    """从 GLM-OCR layout_parsing 响应中提取纯文本。"""
+    md = str(data.get("md_results", "")).strip()
+    if md:
+        lines: list[str] = []
+        for line in md.splitlines():
+            stripped = line.strip()
+            if not stripped:
+                continue
+            if stripped.startswith("#"):
+                stripped = stripped.lstrip("#").strip()
+            if stripped:
+                lines.append(stripped)
+        if lines:
+            return "\n".join(lines)
+
+    details = data.get("layout_details", [])
+    text_items: list[tuple[float, float, str]] = []
+    for page in details:
+        if not isinstance(page, list):
+            continue
+        for elem in page:
+            if not isinstance(elem, dict):
+                continue
+            if elem.get("label") not in {"text", "formula", "table"}:
+                continue
+            content = str(elem.get("content", "")).strip()
+            if not content:
+                continue
+            if content.startswith("#"):
+                content = content.lstrip("#").strip()
+            bbox = elem.get("bbox_2d") or [0, 0, 0, 0]
+            y = float(bbox[1]) if len(bbox) >= 2 else 0.0
+            x = float(bbox[0]) if len(bbox) >= 1 else 0.0
+            text_items.append((y, x, content))
+
+    text_items.sort(key=lambda item: (item[0], item[1]))
+    return "\n".join(item[2] for item in text_items).strip()
 
 
 def _safe_json_loads(raw_text: str) -> Any | None:
@@ -152,6 +216,24 @@ def _normalize_translation_payload(parsed: Any) -> list[dict[str, str]]:
     return normalized
 
 
+def _cache_key_for_ocr(source_items: Sequence[OCRResult]) -> tuple[tuple[str, str], ...]:
+    return tuple(
+        (
+            item.color_tag.label if item.color_tag else "Unknown",
+            " ".join(item.raw_text.strip().split()),
+        )
+        for item in source_items
+    )
+
+
+def _get_enabled_color_palette() -> list[ColorTag]:
+    if not OCR_CHANNELS:
+        return list(COLOR_PALETTE)
+    enabled = {label.lower() for label in OCR_CHANNELS}
+    selected = [tag for tag in COLOR_PALETTE if tag.label.lower() in enabled]
+    return selected or list(COLOR_PALETTE)
+
+
 class OWColorFluentApiClient:
     """`glm-ocr` 与 `deepseek-chat` 的异步调用封装。"""
 
@@ -165,7 +247,7 @@ class OWColorFluentApiClient:
         deepseek_url: str = DEEPSEEK_URL,
         deepseek_model: str = DEEPSEEK_MODEL,
         timeout_sec: float = HTTP_TIMEOUT_SEC,
-        max_concurrent_ocr: int = 4,
+        max_concurrent_ocr: int = OCR_MAX_CONCURRENT,
     ) -> None:
         self._glm_api_key = glm_api_key
         self._deepseek_api_key = deepseek_api_key
@@ -206,7 +288,7 @@ class OWColorFluentApiClient:
                     color_tag=tag,
                     error_msg="GLM_API_KEY 未配置",
                 )
-                for tag in COLOR_PALETTE
+                for tag in _get_enabled_color_palette()
             ]
 
         try:
@@ -223,7 +305,7 @@ class OWColorFluentApiClient:
 
         tasks = [
             asyncio.create_task(self._run_masked_ocr(image_bgr=image_bgr, color_tag=tag))
-            for tag in COLOR_PALETTE
+            for tag in _get_enabled_color_palette()
         ]
         return list(await asyncio.gather(*tasks))
 
@@ -231,9 +313,16 @@ class OWColorFluentApiClient:
         async with self._ocr_semaphore:
             try:
                 masked_gray = build_color_mask_image(image_bgr=image_bgr, color_tag=color_tag)
+                if not _mask_has_foreground(masked_gray):
+                    return OCRResult(
+                        raw_text="",
+                        is_valid=False,
+                        color_tag=color_tag,
+                        error_msg="OCR 无文本输出",
+                    )
                 masked_bgr = cv2.cvtColor(masked_gray, cv2.COLOR_GRAY2BGR)
-                masked_base64 = encode_bgr_image_to_base64(masked_bgr)
-                text = await self._request_glm_ocr(masked_base64, color_tag.label)
+                file_data_uri = encode_bgr_image_to_jpeg_data_uri(masked_bgr)
+                text = await self._request_glm_ocr(file_data_uri)
                 cleaned = text.strip()
                 return OCRResult(
                     raw_text=cleaned,
@@ -249,20 +338,17 @@ class OWColorFluentApiClient:
                     error_msg=f"OCR 通道失败: {exc}",
                 )
 
-    async def _request_glm_ocr(
-        self, image_base64: str, color_label: str | None = None
-    ) -> str:
+    async def _request_glm_ocr(self, file_data_uri: str) -> str:
         payload = {
             "model": self._glm_model,
-            "temperature": 0,
-            "messages": build_ocr_messages(image_base64, color_label=color_label),
+            "file": file_data_uri,
         }
         headers = {"Authorization": f"Bearer {self._glm_api_key}"}
 
         response = await self.client.post(self._glm_url, headers=headers, json=payload)
         response.raise_for_status()
         data = response.json()
-        return _extract_chat_content(data)
+        return _extract_layout_parsing_text(data)
 
     async def translate_ocr_results(
         self, ocr_results: Sequence[OCRResult]
@@ -270,6 +356,10 @@ class OWColorFluentApiClient:
         valid_items = [item for item in ocr_results if item.is_valid and item.raw_text.strip()]
         if not valid_items:
             return []
+        cache_key = _cache_key_for_ocr(valid_items)
+        cached = _translation_cache.get(cache_key)
+        if cached is not None:
+            return cached
 
         if not self._deepseek_api_key:
             return [
@@ -293,11 +383,16 @@ class OWColorFluentApiClient:
             response = await self.client.post(self._deepseek_url, headers=headers, json=payload)
             response.raise_for_status()
             content = _extract_chat_content(response.json())
-            return self._merge_translation_results(
+            results = self._merge_translation_results(
                 source_items=valid_items,
                 raw_content=content,
                 status_code=response.status_code,
             )
+            if any(item.translated.strip() for item in results):
+                if len(_translation_cache) >= _TRANSLATION_CACHE_MAX:
+                    _translation_cache.pop(next(iter(_translation_cache)))
+                _translation_cache[cache_key] = results
+            return results
         except httpx.HTTPError:
             return [
                 TransResult(
@@ -374,4 +469,3 @@ async def translate_ocr_results(ocr_results: Sequence[OCRResult]) -> List[TransR
 def serialize_ocr_results(ocr_results: Iterable[OCRResult]) -> str:
     """调试辅助：将 OCR 结果序列化为 JSON 字符串。"""
     return json.dumps([asdict(item) for item in ocr_results], ensure_ascii=False, indent=2)
-

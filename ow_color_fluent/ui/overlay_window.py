@@ -56,15 +56,15 @@ FONT_BASE_BTN = 9
 FONT_SCALE_MIN = 0.68
 FONT_SCALE_MAX = 1.05
 
-# 毛玻璃面板自动隐藏（毫秒，锁定模式下）
+# F8 译文面板自动隐藏（毫秒，锁定模式下）
 GLASS_AUTO_HIDE_MS = int(os.getenv("GLASS_AUTO_HIDE_MS", "12000"))
+CAPTURE_HIDE_DELAY_MS = max(0, int(os.getenv("CAPTURE_HIDE_DELAY_MS", "35")))
 
-# 视觉样式（glass 模式用 transparent 让 DWM 模糊透出）
+# 视觉样式
 COLOR_CARD_SETUP = "#1E293B"
 COLOR_CARD_BORDER = "#64748B"
 COLOR_TEXTBOX_SETUP = "#0F172A"
-# 毛玻璃模式下根窗口底色（非 colorkey，供 DWM 合成）
-GLASS_ROOT_BG = "#0A0E17"
+COLOR_FRAME_PAD = 8
 
 
 def _enable_dpi_awareness() -> None:
@@ -90,8 +90,11 @@ class OverlayWindow(ctk.CTk):
         super().__init__()
 
         self._runtime = AsyncRuntime()
+        self._api_client = OWColorFluentApiClient()
         self._locked = False
         self._busy = False
+        self._capture_pending = False
+        self._closing = False
         self._dragging = False
         self._resizing = False
         self._drag_offset_x = 0
@@ -107,6 +110,7 @@ class OverlayWindow(ctk.CTk):
         self._last_scaled_h = 0
         self._visual_state = "setup"
         self._glass_hide_job: str | None = None
+        self._glass_dismiss_bound = False
 
         self.title("OW-Color-Fluent-Translator")
         self.overrideredirect(True)
@@ -431,8 +435,6 @@ class OverlayWindow(ctk.CTk):
             pass
 
     def _set_click_through(self, enabled: bool) -> None:
-        if self._visual_state == "glass":
-            enabled = False
         if not sys.platform.startswith("win"):
             return
         try:
@@ -464,19 +466,57 @@ class OverlayWindow(ctk.CTk):
     def _hide_glass_panel(self) -> None:
         self._glass_hide_job = None
         if self._locked and self._visual_state == "glass":
-            self._set_visual_state("hidden")
+            self._return_to_locked_hidden()
 
     def _set_root_colorkey(self, enabled: bool) -> None:
-        """colorkey 透明与 DWM 毛玻璃互斥；glass 模式必须关闭 colorkey。"""
+        """启用/关闭 colorkey 穿透底色。"""
         if enabled:
             self.configure(fg_color=TRANSPARENT_COLOR)
             self.attributes("-transparentcolor", TRANSPARENT_COLOR)
+            self._restore_layered_for_colorkey()
         else:
             try:
                 self.attributes("-transparentcolor", "")
             except Exception:
                 pass
-            self.configure(fg_color=GLASS_ROOT_BG)
+
+    def _restore_layered_for_colorkey(self) -> None:
+        """DWM 毛玻璃会移除分层窗口属性，切回 colorkey 前需恢复。"""
+        if not sys.platform.startswith("win"):
+            return
+        try:
+            hwnd = self._get_hwnd()
+            style = ctypes.windll.user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
+            style |= WS_EX_LAYERED
+            ctypes.windll.user32.SetWindowLongW(hwnd, GWL_EXSTYLE, style)
+            self._refresh_window_style(hwnd)
+        except Exception:
+            pass
+
+    def _bind_glass_dismiss_events(self) -> None:
+        if self._glass_dismiss_bound:
+            return
+        for widget in (self, self.card, self.result_view):
+            widget.bind("<Escape>", self._return_to_locked_hidden, add="+")
+            widget.bind("<Button-1>", self._return_to_locked_hidden, add="+")
+            widget.bind("<Button-3>", self._return_to_locked_hidden, add="+")
+        self._glass_dismiss_bound = True
+
+    def _unbind_glass_dismiss_events(self) -> None:
+        if not self._glass_dismiss_bound:
+            return
+        for widget in (self, self.card, self.result_view):
+            for seq in ("<Escape>", "<Button-1>", "<Button-3>"):
+                widget.unbind(seq)
+        self._glass_dismiss_bound = False
+
+    def _return_to_locked_hidden(self, _event: Any = None) -> str:
+        """F8 译文态回到 F9 完全透明锁定态。"""
+        if not self._locked or self._visual_state != "glass":
+            return "break"
+        self.result_view.delete("1.0", "end")
+        self._set_visual_state("hidden")
+        return "break"
 
     def _apply_acrylic(self, enabled: bool) -> None:
         if not sys.platform.startswith("win"):
@@ -503,23 +543,36 @@ class OverlayWindow(ctk.CTk):
         self.footer.grid_remove()
 
     def _set_visual_state(self, state: str) -> None:
-        """setup=编辑对齐 | hidden=游戏中全透明 | glass=F8 后毛玻璃译文。"""
+        """setup=编辑对齐 | hidden=F9 完全透明 | glass=F8 透明边框+译文。"""
         self._visual_state = state
         self._cancel_glass_hide()
+        self._unbind_glass_dismiss_events()
+        self._apply_acrylic(False)
 
         if state == "hidden":
             self._set_root_colorkey(True)
-            self.card.configure(fg_color=TRANSPARENT_COLOR, border_width=0)
-            self.result_view.configure(fg_color=TRANSPARENT_COLOR, border_width=0)
+            self.card.pack_configure(padx=0, pady=0)
+            self.card.configure(
+                fg_color=TRANSPARENT_COLOR,
+                border_width=0,
+                border_color=TRANSPARENT_COLOR,
+            )
+            self.result_view.configure(
+                fg_color=TRANSPARENT_COLOR,
+                border_width=0,
+                border_color=TRANSPARENT_COLOR,
+            )
             self._hide_setup_widgets()
             self.result_view.grid_remove()
-            self._apply_acrylic(False)
             if self._locked:
                 self._set_click_through(True)
+            else:
+                self._set_click_through(False)
             return
 
         if state == "setup":
             self._set_root_colorkey(True)
+            self.card.pack_configure(padx=COLOR_FRAME_PAD, pady=COLOR_FRAME_PAD)
             self.card.configure(
                 fg_color=COLOR_CARD_SETUP,
                 border_width=1,
@@ -531,25 +584,35 @@ class OverlayWindow(ctk.CTk):
                 border_color="#475569",
             )
             self._show_setup_widgets()
-            self._apply_acrylic(False)
             self._set_click_through(False)
             self._refresh_font_scale_from_window()
             return
 
         if state == "glass":
-            self._set_root_colorkey(False)
-            self.card.configure(fg_color="transparent", border_width=1, border_color="#94A3B8")
-            self.result_view.configure(fg_color="transparent", border_width=0)
+            self._set_root_colorkey(True)
+            self.card.pack_configure(padx=COLOR_FRAME_PAD, pady=COLOR_FRAME_PAD)
+            self.card.configure(
+                fg_color=TRANSPARENT_COLOR,
+                border_width=1,
+                border_color=COLOR_CARD_BORDER,
+            )
+            self.result_view.configure(
+                fg_color=TRANSPARENT_COLOR,
+                border_width=0,
+                border_color=TRANSPARENT_COLOR,
+            )
             self._hide_setup_widgets()
             self.result_view.grid(row=0, column=0, sticky="nsew", padx=12, pady=12)
             self.card.grid_rowconfigure(0, weight=1)
-            self._apply_acrylic(True)
             self._set_click_through(False)
+            self._bind_glass_dismiss_events()
             self._refresh_font_scale_from_window()
             self._schedule_glass_hide()
 
     def trigger_capture(self) -> None:
         if self._busy:
+            self._capture_pending = True
+            self._set_status("排队中", "#93C5FD")
             return
         region = self._current_capture_region()
         if region["width"] < 80 or region["height"] < 60:
@@ -559,18 +622,19 @@ class OverlayWindow(ctk.CTk):
             return
 
         self._busy = True
+        self._capture_pending = False
         self._set_status("识别中", "#60A5FA")
 
         if self._locked:
-            self._set_visual_state("glass")
-            self.result_view.delete("1.0", "end")
-            self._insert_colored_text("识别中...", color="#60A5FA", newline=False)
+            self._set_visual_state("hidden")
+            self._launch_pipeline(region, restore_after_capture=False)
         else:
             self._set_visual_state("setup")
-
-        self.withdraw()
-        self.after(90, lambda: self._launch_pipeline(region))
-        self.after(180, self._restore_after_capture)
+            self.withdraw()
+            self.after(
+                CAPTURE_HIDE_DELAY_MS,
+                lambda: self._launch_pipeline(region, restore_after_capture=True),
+            )
 
     def _restore_after_capture(self) -> None:
         self.deiconify()
@@ -581,8 +645,22 @@ class OverlayWindow(ctk.CTk):
         else:
             self._set_visual_state("setup")
 
-    def _launch_pipeline(self, region: dict[str, int]) -> None:
-        future = self._runtime.submit(self._pipeline(region))
+    def _show_capture_progress(self, restore_window: bool) -> None:
+        if self._closing:
+            return
+        if restore_window:
+            self._restore_after_capture()
+        elif self._locked:
+            self._set_visual_state("glass")
+        self.result_view.delete("1.0", "end")
+        self._insert_colored_text("识别中...", color="#60A5FA", newline=False)
+
+    def _launch_pipeline(
+        self, region: dict[str, int], *, restore_after_capture: bool
+    ) -> None:
+        future = self._runtime.submit(
+            self._pipeline(region, restore_after_capture=restore_after_capture)
+        )
         future.add_done_callback(self._on_pipeline_future_done)
 
     def _on_pipeline_future_done(self, future: Future) -> None:
@@ -592,11 +670,13 @@ class OverlayWindow(ctk.CTk):
         except Exception as exc:
             self.after(0, self._handle_pipeline_done, None, str(exc))
 
-    async def _pipeline(self, region: dict[str, int]) -> dict[str, Any]:
+    async def _pipeline(
+        self, region: dict[str, int], *, restore_after_capture: bool
+    ) -> dict[str, Any]:
         capture_data = await asyncio.to_thread(capture_region_to_base64, region)
-        async with OWColorFluentApiClient() as client:
-            ocr_results = await client.process_multi_channel_ocr(capture_data)
-            trans_results = await client.translate_ocr_results(ocr_results)
+        self.after(0, self._show_capture_progress, restore_after_capture)
+        ocr_results = await self._api_client.process_multi_channel_ocr(capture_data)
+        trans_results = await self._api_client.translate_ocr_results(ocr_results)
         return {"ocr": ocr_results, "trans": trans_results}
 
     def _handle_pipeline_done(self, payload: object, error: str) -> None:
@@ -609,10 +689,12 @@ class OverlayWindow(ctk.CTk):
         if error:
             self._set_status("失败", "#F87171")
             self._append_message(f"识别失败：{error}", "#F87171")
+            self._run_pending_capture_if_needed()
             return
         if not isinstance(payload, dict):
             self._set_status("失败", "#F87171")
             self._append_message("识别失败：返回结果异常。", "#F87171")
+            self._run_pending_capture_if_needed()
             return
 
         trans_results = payload.get("trans", [])
@@ -629,6 +711,13 @@ class OverlayWindow(ctk.CTk):
             self._schedule_glass_hide()
         else:
             self._set_visual_state("setup")
+
+        self._run_pending_capture_if_needed()
+
+    def _run_pending_capture_if_needed(self) -> None:
+        if self._capture_pending and not self._closing:
+            self._capture_pending = False
+            self.after(40, self.trigger_capture)
 
     def _insert_colored_text(
         self,
@@ -781,9 +870,16 @@ class OverlayWindow(ctk.CTk):
         )
 
     def _on_close(self) -> None:
+        self._closing = True
+        self._capture_pending = False
         try:
             if keyboard is not None:
                 keyboard.unhook_all_hotkeys()
+        except Exception:
+            pass
+        try:
+            future = self._runtime.submit(self._api_client.aclose())
+            future.result(timeout=1.0)
         except Exception:
             pass
         self._runtime.stop()
