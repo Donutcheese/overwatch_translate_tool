@@ -68,6 +68,28 @@
 
 > **编辑模式**下为实心/半透明面板，**不会**显示毛玻璃——这是正常现象，用于对齐选区。
 
+### 实际使用截图与反馈
+
+以下截图来自当前版本的真实游戏使用画面，用于记录 Overlay 对齐、聊天识别与译文展示效果。
+
+<p align="center">
+  <img src="img/screenshots/actual-edit-mode.png" alt="编辑模式下对齐守望先锋聊天区域" width="900">
+</p>
+
+> 编辑模式下可以拖拽和缩放窗口，对齐左下角聊天区域；当画面中没有可识别聊天内容时，会显示 OCR 无文本输出。
+
+<p align="center">
+  <img src="img/screenshots/actual-chat-overlay.png" alt="游戏聊天区域中的实时识别与翻译结果" width="900">
+</p>
+
+> 实战聊天场景中，OCR 与翻译流水线已经能更快地返回结果， F8 快速查看队伍与系统提示信息。
+
+<p align="center">
+  <img src="img/screenshots/actual-result-overlay.png" alt="透明 Overlay 显示本地化翻译结果" width="900">
+</p>
+
+> 当前本地化效果仍在继续打磨：部分韩文口语、玩家昵称、英雄简称和局内语气还需要更贴近国服玩家表达。最近一版在响应速度上已经有明显提升，后续会继续寻找其他优化翻译速度的方法，例如更细的缓存策略、减少无效 OCR 通道、优化请求并发与超时策略。
+
 ### 性能与稳定性调优
 
 实时查看翻译时，优先减少 OCR 请求数与窗口状态切换耗时。可在 `.env` 中覆盖：
@@ -127,7 +149,8 @@ overwatch_translate_tool/
 │   ├── image.png      # 详细系统流程图
 │   ├── font_color.png # 聊天颜色语义参考图
 │   ├── icon.png       # 应用图标源文件
-│   └── icon.ico       # Windows 窗口 / exe 图标
+│   ├── icon.ico       # Windows 窗口 / exe 图标
+│   └── screenshots/   # 实际使用截图
 ├── scripts/               # venv 安装脚本（提交到 Git，见 scripts/README.md）
 │   ├── setup_venv.ps1
 │   ├── setup_venv.bat

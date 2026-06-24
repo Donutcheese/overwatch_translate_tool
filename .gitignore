@@ -29,7 +29,7 @@ Thumbs.db
 Desktop.ini
 
 # Screenshots (if saving locally)
-screenshots/
+/screenshots/
 *.png
 !img/**/*.png
 !img/**/*.ico

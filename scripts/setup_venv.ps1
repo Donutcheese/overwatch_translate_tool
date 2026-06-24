@@ -93,9 +93,14 @@ if (-not (Test-Path (Join-Path $ProjectRoot "img\icon.ico")) -and (Test-Path (Jo
 
 Write-Host ""
 Write-Host "Running pywin32 post-install (Windows)..."
-& $VenvPython -m pywin32_postinstall -install 2>$null
-if ($LASTEXITCODE -ne 0) {
-    Write-Host "[WARN] pywin32_postinstall skipped (may already be configured)." -ForegroundColor Yellow
+$PyWin32PostInstall = Join-Path $VenvDir "Scripts\pywin32_postinstall.py"
+if (Test-Path $PyWin32PostInstall) {
+    & $VenvPython $PyWin32PostInstall -install 2>$null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "[WARN] pywin32_postinstall skipped (may already be configured)." -ForegroundColor Yellow
+    }
+} else {
+    Write-Host "[WARN] pywin32_postinstall not found; skipping." -ForegroundColor Yellow
 }
 
 Write-Host ""
