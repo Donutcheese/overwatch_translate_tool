@@ -65,6 +65,11 @@ COLOR_CARD_SETUP = "#1E293B"
 COLOR_CARD_BORDER = "#64748B"
 COLOR_TEXTBOX_SETUP = "#0F172A"
 COLOR_FRAME_PAD = 8
+# F8 译文态毛玻璃失败时的回退底色（深色，保证译文可读）
+COLOR_GLASS_FALLBACK = "#0F172A"
+# F8 译文态毛玻璃 tint（ABGR）。0x99 = 约 60% 不透明度，深色偏蓝。
+# 调大 alpha 更糊更暗（如 0xCC101826），调小更通透（如 0x66101826）。
+GLASS_TINT_ABGR = int(os.getenv("GLASS_TINT_ABGR", "0x99101826"), 16)
 
 
 def _enable_dpi_awareness() -> None:
@@ -111,6 +116,7 @@ class OverlayWindow(ctk.CTk):
         self._visual_state = "setup"
         self._glass_hide_job: str | None = None
         self._glass_dismiss_bound = False
+        self._acrylic_after_job: str | None = None
 
         self.title("OW-Color-Fluent-Translator")
         self.overrideredirect(True)
@@ -521,12 +527,23 @@ class OverlayWindow(ctk.CTk):
     def _apply_acrylic(self, enabled: bool) -> None:
         if not sys.platform.startswith("win"):
             return
+        # 取消上一次挂起的应用：避免 glass->setup 快速切换时，
+        # 旧的 enabled=True 回调晚于 enabled=False 触发，导致毛玻璃残留。
+        if self._acrylic_after_job:
+            try:
+                self.after_cancel(self._acrylic_after_job)
+            except Exception:
+                pass
+            self._acrylic_after_job = None
 
         def _run() -> None:
+            self._acrylic_after_job = None
+            if self._closing:
+                return
             self.update_idletasks()
-            set_acrylic_blur(self._get_hwnd(), enabled)
+            set_acrylic_blur(self._get_hwnd(), enabled, GLASS_TINT_ABGR)
 
-        self.after(50, _run)
+        self._acrylic_after_job = self.after(50, _run)
 
     def _show_setup_widgets(self) -> None:
         self.card.grid_rowconfigure(0, weight=0)
@@ -543,7 +560,7 @@ class OverlayWindow(ctk.CTk):
         self.footer.grid_remove()
 
     def _set_visual_state(self, state: str) -> None:
-        """setup=编辑对齐 | hidden=F9 完全透明 | glass=F8 透明边框+译文。"""
+        """setup=编辑对齐 | hidden=F9 完全透明 | glass=F8 毛玻璃+译文。"""
         self._visual_state = state
         self._cancel_glass_hide()
         self._unbind_glass_dismiss_events()
@@ -589,17 +606,21 @@ class OverlayWindow(ctk.CTk):
             return
 
         if state == "glass":
-            self._set_root_colorkey(True)
+            # F8 译文态：启用 DWM 毛玻璃，让译文浮在模糊背景上，提升可读性。
+            # colorkey 透明依赖 WS_EX_LAYERED，会阻止 DWM 合成毛玻璃，故关闭 colorkey。
+            self._set_root_colorkey(False)
+            # acrylic 失败时的回退底色（深色，保证译文可读）；acrylic 成功时被毛玻璃覆盖。
+            self.configure(fg_color=COLOR_GLASS_FALLBACK)
             self.card.pack_configure(padx=COLOR_FRAME_PAD, pady=COLOR_FRAME_PAD)
             self.card.configure(
-                fg_color=TRANSPARENT_COLOR,
+                fg_color="transparent",
                 border_width=1,
                 border_color=COLOR_CARD_BORDER,
             )
             self.result_view.configure(
-                fg_color=TRANSPARENT_COLOR,
+                fg_color="transparent",
                 border_width=0,
-                border_color=TRANSPARENT_COLOR,
+                border_color="transparent",
             )
             self._hide_setup_widgets()
             self.result_view.grid(row=0, column=0, sticky="nsew", padx=12, pady=12)
@@ -607,6 +628,7 @@ class OverlayWindow(ctk.CTk):
             self._set_click_through(False)
             self._bind_glass_dismiss_events()
             self._refresh_font_scale_from_window()
+            self._apply_acrylic(True)  # 启用毛玻璃（Win11 DWM Acrylic / Mica）
             self._schedule_glass_hide()
 
     def trigger_capture(self) -> None:
