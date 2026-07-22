@@ -1,3 +1,4 @@
 # PyInstaller 打包依赖（仅构建 exe 时需要）
 pyinstaller>=6.0.0
 Pillow>=10.3.0
+graphviz>=0.21

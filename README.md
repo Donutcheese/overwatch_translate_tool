@@ -90,31 +90,58 @@
 
 > 当前本地化效果仍在继续打磨：部分韩文口语、玩家昵称、英雄简称和局内语气还需要更贴近国服玩家表达。最近一版在响应速度上已经有明显提升，后续会继续寻找其他优化翻译速度的方法，例如更细的缓存策略、减少无效 OCR 通道、优化请求并发与超时策略。
 
-### 性能与稳定性调优
+### 20 人并发与 2 秒技术路线
 
-目标：**F8 后约 1s 内**在毛玻璃层覆盖原聊天位置显示中文。冷启动双 API（GLM-OCR → DeepSeek）很难稳定压到 1s，因此采用**混合快路径**：
+目标：**至少 20 人同时触发时，端到端 P95 ≤ 2 秒**，并在原文 bbox 位置先模糊、后覆盖译文。当前 GLM-OCR → DeepSeek 双 API 冷路径只能作为过渡实现；目标架构以本地 OCR 和 GPU 本地翻译为关键路径，远程 API 仅负责低置信度回退与异步纠错。
+
+![20 人并发翻译技术路线](docs/architecture/translation_route.svg)
+
+图由 `scripts/generate_technical_route.py` 生成，统一使用 `#f4c320`、`#2a2a2a`、`#ffffff`：
+
+```powershell
+conda activate py312
+python -m pip install graphviz
+conda install -n py312 graphviz -y
+python scripts/generate_technical_route.py
+```
+
+#### 本地 OCR 可靠性前提
+
+本地 OCR **可以作为 OW 固定聊天区域的主链路，但必须通过项目专用数据集验收**。PP-OCRv5 已提供韩文、英文、日文移动识别模型和 bbox；官方韩文通用数据集准确率约 88%，不能直接等同于游戏聊天准确率。上线前必须满足：
+
+- 使用至少 2,000 张真实 OW 聊天截图，覆盖 1080p/2K/4K、不同 UI 缩放、韩文/英文/日文、透明背景和战斗特效。
+- 行级字符准确率 `CER ≤ 5%`，关键术语召回率 `≥ 98%`，bbox IoU `≥ 0.85`。
+- 本地 OCR P95 `≤ 450ms`；置信度 `< 0.90` 时调用 GLM-OCR，硬超时 `700ms`。
+- OCR 只执行一次；根据 bbox 内像素颜色分类 Friendly/Group/Alert，禁止按颜色发起三次 OCR。
+- 本地 OCR 或回退失败时显示上一次可信结果，不阻塞 Overlay UI。
+
+#### 分层快路径
 
 | 层级 | 机制 | 预期耗时 |
 |------|------|----------|
 | L0 本地词典 | `phrase_cache.OW_PHRASE_DICT` 命中 `힐좀`/`C9` 等 | <5ms |
 | L1 行级记忆 | LRU 翻译记忆，重复句子不再调 LLM | <5ms |
-| L2 指令前缀预热 | 启动时 `warm_translation_prefix()`，命中 DeepSeek Context Cache | 降 TTFT |
-| L3 锁定态预取 | F9 后后台周期 OCR+预翻译，F8 复用 ≤1.2s 内结果 | 热路径可跳过 OCR |
-| L4 模型 | 默认 `deepseek-v4-flash` + `thinking.disabled`，限制 `max_tokens` | 缩短生成 |
+| L2 本地 OCR | PP-OCRv5 Mobile 单次检测识别，输出文本与 bbox | P95 ≤450ms |
+| L3 中心缓存 | Redis 跨用户缓存、相同请求合并 | <10ms |
+| L4 GPU 翻译 | 动态批处理最多 20 条，`beam_size=1` | P95 ≤650ms |
+| L5 远程纠错 | GLM-OCR/DeepSeek 仅处理低置信度结果 | 不阻塞首屏 |
 
-```mermaid
-flowchart LR
-    A["F8 触发"] --> B{"预取 OCR 新鲜?"}
-    B -- "是" --> C["复用预取 OCR"]
-    B -- "否" --> D["并发 GLM-OCR"]
-    C --> E["行级: 词典/记忆"]
-    D --> E
-    E --> F{"仍有未命中行?"}
-    F -- "否" --> G["原位覆盖/列表渲染"]
-    F -- "是" --> H["DeepSeek Flash 非思考"]
-    H --> G
-    G --> I["毛玻璃 + bbox 覆盖原文"]
-```
+#### 延迟与容量预算
+
+| 阶段 | P95 预算 |
+|------|---------:|
+| 截图并立即模糊 | 50ms |
+| 本地 OCR | 450ms |
+| bbox、颜色分类、行差异 | 50ms |
+| 网络和中心网关排队 | 100ms |
+| Redis 或 GPU 翻译 | 650ms |
+| 原位渲染 | 50ms |
+| 抖动余量 | 650ms |
+| **端到端** | **2,000ms** |
+
+验收必须采用 20/30/40 客户端同步突发压测，而不是仅保持连接：冷缓存 P95 ≤2 秒、热缓存 P95 ≤300ms、P99 ≤2.5 秒、成功率 ≥99.5%、HTTP 429 为 0。单 GPU 可以验证容量，但生产环境需要两台 GPU 节点做 N+1 冗余。
+
+#### 当前过渡配置
 
 可在 `.env` 中覆盖：
 

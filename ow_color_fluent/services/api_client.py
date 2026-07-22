@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import logging
 import time
 from dataclasses import asdict
 from typing import Any, Iterable, List, Optional, Sequence
@@ -45,10 +46,16 @@ from .phrase_cache import (
 
 _TRANSLATION_CACHE_MAX = 256
 _translation_cache: dict[tuple[tuple[str, str], ...], list[TransResult]] = {}
+logger = logging.getLogger(__name__)
+
+
+def _elapsed_ms(started: float) -> float:
+    return (time.perf_counter() - started) * 1000
 
 
 def capture_region_to_base64(region: dict[str, int]) -> CaptureData:
     """使用 `mss` 捕获指定区域并转为 PNG Base64（纯内存）。"""
+    started = time.perf_counter()
     with mss.mss() as sct:
         shot = sct.grab(region)
         bgra_frame = np.array(shot, dtype=np.uint8)
@@ -59,6 +66,12 @@ def capture_region_to_base64(region: dict[str, int]) -> CaptureData:
         raise RuntimeError("截图编码失败：无法将内存图像编码为 PNG。")
 
     image_base64 = base64.b64encode(encoded.tobytes()).decode("utf-8")
+    logger.info(
+        "capture_region_to_base64: %.1fms region=%sx%s",
+        _elapsed_ms(started),
+        bgr_frame.shape[1],
+        bgr_frame.shape[0],
+    )
     return CaptureData(
         image_base64=image_base64,
         width=bgr_frame.shape[1],
@@ -376,6 +389,7 @@ class OWColorFluentApiClient:
     async def process_multi_channel_ocr(
         self, capture_data: CaptureData
     ) -> List[OCRResult]:
+        started = time.perf_counter()
         if not self._glm_api_key:
             return [
                 OCRResult(
@@ -411,7 +425,14 @@ class OWColorFluentApiClient:
             )
             for tag in _get_enabled_color_palette()
         ]
-        return list(await asyncio.gather(*tasks))
+        results = list(await asyncio.gather(*tasks))
+        logger.info(
+            "process_multi_channel_ocr: %.1fms valid=%s/%s",
+            _elapsed_ms(started),
+            sum(1 for item in results if item.is_valid),
+            len(results),
+        )
+        return results
 
     async def _run_masked_ocr(
         self,
@@ -584,6 +605,7 @@ class OWColorFluentApiClient:
     async def _request_llm_translations(
         self, source_items: Sequence[OCRResult]
     ) -> list[TransResult]:
+        started = time.perf_counter()
         payload = self._build_chat_payload(build_translation_messages(source_items))
         headers = {"Authorization": f"Bearer {self._deepseek_api_key}"}
         try:
@@ -592,12 +614,23 @@ class OWColorFluentApiClient:
             )
             response.raise_for_status()
             content = _extract_chat_content(response.json())
-            return self._merge_translation_results(
+            results = self._merge_translation_results(
                 source_items=source_items,
                 raw_content=content,
                 status_code=response.status_code,
             )
+            logger.info(
+                "request_llm_translations: %.1fms lines=%s",
+                _elapsed_ms(started),
+                len(source_items),
+            )
+            return results
         except httpx.HTTPError:
+            logger.exception(
+                "request_llm_translations: %.1fms failed lines=%s",
+                _elapsed_ms(started),
+                len(source_items),
+            )
             return [
                 TransResult(
                     source_text=item.raw_text,

@@ -66,16 +66,22 @@ FONT_SCALE_MAX = 1.05
 GLASS_AUTO_HIDE_MS = int(os.getenv("GLASS_AUTO_HIDE_MS", "12000"))
 CAPTURE_HIDE_DELAY_MS = max(0, int(os.getenv("CAPTURE_HIDE_DELAY_MS", "35")))
 
-# 视觉样式
-COLOR_CARD_SETUP = "#1E293B"
-COLOR_CARD_BORDER = "#64748B"
-COLOR_TEXTBOX_SETUP = "#0F172A"
+# Fries Cup 视觉样式：https://fries-cup.com/zh
+COLOR_YELLOW = "#F4C320"
+COLOR_BLACK = "#2A2A2A"
+COLOR_BLACK_DEEP = "#191919"
+COLOR_WHITE = "#FFFFFF"
+COLOR_PAPER = "#F7F5EF"
+COLOR_YELLOW_PALE = "#FFF8D9"
+COLOR_MUTED = "#B8B6AF"
+COLOR_CARD_SETUP = COLOR_BLACK
+COLOR_CARD_BORDER = COLOR_YELLOW
+COLOR_TEXTBOX_SETUP = COLOR_BLACK_DEEP
 COLOR_FRAME_PAD = 8
 # F8 译文态毛玻璃失败时的回退底色（深色，保证译文可读）
-COLOR_GLASS_FALLBACK = "#0F172A"
-# F8 译文态毛玻璃 tint（ABGR）。0x99 = 约 60% 不透明度，深色偏蓝。
-# 调大 alpha 更糊更暗（如 0xCC101826），调小更通透（如 0x66101826）。
-GLASS_TINT_ABGR = int(os.getenv("GLASS_TINT_ABGR", "0x99101826"), 16)
+COLOR_GLASS_FALLBACK = COLOR_BLACK_DEEP
+# F8 译文态毛玻璃 tint（ABGR）：#191919，约 60% 不透明度。
+GLASS_TINT_ABGR = int(os.getenv("GLASS_TINT_ABGR", "0x99191919"), 16)
 
 
 def _enable_dpi_awareness() -> None:
@@ -96,7 +102,7 @@ class OverlayWindow(ctk.CTk):
     def __init__(self) -> None:
         _enable_dpi_awareness()
         ctk.set_appearance_mode("dark")
-        ctk.set_default_color_theme("blue")
+        ctk.set_default_color_theme("dark-blue")
 
         super().__init__()
 
@@ -145,16 +151,16 @@ class OverlayWindow(ctk.CTk):
         self._apply_ui_scale()
         self._apply_lock_mode(False)
         self._update_region_label()
-        self._set_status("待命", "#6EE7B7")
+        self._set_status("待命", COLOR_YELLOW)
         self.result_view.delete("1.0", "end")
         if not GLM_API_KEY.strip():
             self._insert_colored_text(
                 "GLM_API_KEY 未配置：请在项目根目录创建 local_api_keys.py",
-                color="#F59E0B",
+                color=COLOR_YELLOW,
             )
-            self._insert_colored_text("示例：GLM_API_KEY = \"你的智谱Key\"", color="#94A3B8")
+            self._insert_colored_text("示例：GLM_API_KEY = \"你的智谱Key\"", color=COLOR_MUTED)
         else:
-            self._insert_colored_text("F8 识别 · F9 锁定后游戏中透明", color="#94A3B8")
+            self._insert_colored_text("F8 识别 · F9 锁定后游戏中透明", color=COLOR_MUTED)
 
         # 后台预热 DeepSeek 指令前缀缓存，降低首次翻译 TTFT
         self._runtime.submit(self._api_client.warm_translation_prefix())
@@ -293,7 +299,7 @@ class OverlayWindow(ctk.CTk):
             text="●",
             width=self._scaled_px(10),
             font=self._scaled_font(FONT_BASE_TITLE),
-            text_color="#6EE7B7",
+            text_color=COLOR_YELLOW,
         )
         self.dot_status.grid(row=0, column=0, padx=(0, 4))
 
@@ -301,7 +307,7 @@ class OverlayWindow(ctk.CTk):
             self.header,
             text="OW Translator",
             font=self._scaled_font(FONT_BASE_TITLE, "bold"),
-            text_color="#E2E8F0",
+            text_color=COLOR_WHITE,
             anchor="w",
         )
         self.title_label.grid(row=0, column=1, sticky="ew")
@@ -313,7 +319,7 @@ class OverlayWindow(ctk.CTk):
             self.header_actions,
             text="编辑模式",
             font=self._scaled_font(FONT_BASE_MODE),
-            text_color="#93C5FD",
+            text_color=COLOR_YELLOW,
         )
         self.mode_label.pack(side="left", padx=(0, 6))
 
@@ -323,8 +329,9 @@ class OverlayWindow(ctk.CTk):
             width=self._scaled_px(72),
             height=self._scaled_px(24),
             font=self._scaled_font(FONT_BASE_BTN),
-            fg_color="#2563EB",
-            hover_color="#1D4ED8",
+            fg_color=COLOR_YELLOW,
+            hover_color="#D9AA00",
+            text_color=COLOR_BLACK,
             command=self.trigger_capture,
         )
         self.capture_btn.pack(side="left", padx=(0, 4))
@@ -335,8 +342,11 @@ class OverlayWindow(ctk.CTk):
             width=self._scaled_px(72),
             height=self._scaled_px(24),
             font=self._scaled_font(FONT_BASE_BTN),
-            fg_color="#334155",
-            hover_color="#475569",
+            fg_color=COLOR_BLACK_DEEP,
+            hover_color=COLOR_BLACK,
+            border_width=1,
+            border_color=COLOR_YELLOW,
+            text_color=COLOR_WHITE,
             command=self.toggle_lock_mode,
         )
         self.lock_btn.pack(side="left", padx=(0, 4))
@@ -347,8 +357,11 @@ class OverlayWindow(ctk.CTk):
             width=self._scaled_px(24),
             height=self._scaled_px(24),
             font=self._scaled_font(FONT_BASE_TITLE, "bold"),
-            fg_color="#7F1D1D",
-            hover_color="#991B1B",
+            fg_color=COLOR_BLACK_DEEP,
+            hover_color=COLOR_YELLOW,
+            border_width=1,
+            border_color=COLOR_YELLOW,
+            text_color=COLOR_WHITE,
             command=self._on_close,
         )
         self.close_btn.pack(side="left")
@@ -357,7 +370,7 @@ class OverlayWindow(ctk.CTk):
             self.card,
             text="",
             font=self._scaled_font(FONT_BASE_REGION),
-            text_color="#94A3B8",
+            text_color=COLOR_MUTED,
             anchor="w",
         )
         self.region_label.grid(row=1, column=0, sticky="ew", padx=8, pady=(4, 2))
@@ -366,9 +379,9 @@ class OverlayWindow(ctk.CTk):
             self.card,
             font=self._scaled_font(FONT_BASE_BODY),
             fg_color=COLOR_TEXTBOX_SETUP,
-            border_color="#475569",
+            border_color=COLOR_YELLOW,
             border_width=1,
-            text_color="#E2E8F0",
+            text_color=COLOR_PAPER,
             wrap="word",
             activate_scrollbars=True,
         )
@@ -387,7 +400,7 @@ class OverlayWindow(ctk.CTk):
             self.footer,
             text="◢",
             font=self._scaled_font(FONT_BASE_REGION),
-            text_color="#64748B",
+            text_color=COLOR_YELLOW,
             width=self._resize_handle_size,
             height=self._resize_handle_size,
         )
@@ -414,7 +427,7 @@ class OverlayWindow(ctk.CTk):
 
     def _register_hotkeys(self) -> None:
         if keyboard is None:
-            self._append_message("热键库不可用：将仅支持按钮触发。", "#F59E0B")
+            self._append_message("热键库不可用：将仅支持按钮触发。", COLOR_YELLOW)
             return
         try:
             keyboard.add_hotkey(
@@ -428,7 +441,7 @@ class OverlayWindow(ctk.CTk):
                 suppress=False,
             )
         except Exception as exc:
-            self._append_message(f"热键注册失败：{exc}", "#F59E0B")
+            self._append_message(f"热键注册失败：{exc}", COLOR_YELLOW)
 
     def _get_hwnd(self) -> int:
         wid = int(self.winfo_id())
@@ -618,7 +631,7 @@ class OverlayWindow(ctk.CTk):
             self.result_view.configure(
                 fg_color=COLOR_TEXTBOX_SETUP,
                 border_width=1,
-                border_color="#475569",
+                border_color=COLOR_YELLOW,
             )
             self._show_list_view()
             self._show_setup_widgets()
@@ -658,18 +671,18 @@ class OverlayWindow(ctk.CTk):
     def trigger_capture(self) -> None:
         if self._busy:
             self._capture_pending = True
-            self._set_status("排队中", "#93C5FD")
+            self._set_status("排队中", COLOR_YELLOW)
             return
         region = self._current_capture_region()
         if region["width"] < 80 or region["height"] < 60:
             if self._locked:
                 self._set_visual_state("glass")
-            self._append_message("截图区域过小，请扩大窗口。", "#F59E0B")
+            self._append_message("截图区域过小，请扩大窗口。", COLOR_YELLOW)
             return
 
         self._busy = True
         self._capture_pending = False
-        self._set_status("识别中", "#60A5FA")
+        self._set_status("识别中", COLOR_YELLOW)
 
         if self._locked:
             self._set_visual_state("hidden")
@@ -699,7 +712,7 @@ class OverlayWindow(ctk.CTk):
         elif self._locked:
             self._set_visual_state("glass")
         self.result_view.delete("1.0", "end")
-        self._insert_colored_text("识别中...", color="#60A5FA", newline=False)
+        self._insert_colored_text("识别中...", color=COLOR_YELLOW, newline=False)
 
     def _launch_pipeline(
         self, region: dict[str, int], *, restore_after_capture: bool
@@ -833,13 +846,13 @@ class OverlayWindow(ctk.CTk):
             self._set_visual_state("setup")
 
         if error:
-            self._set_status("失败", "#F87171")
-            self._append_message(f"识别失败：{error}", "#F87171")
+            self._set_status("失败", COLOR_YELLOW)
+            self._append_message(f"识别失败：{error}", COLOR_YELLOW)
             self._run_pending_capture_if_needed()
             return
         if not isinstance(payload, dict):
-            self._set_status("失败", "#F87171")
-            self._append_message("识别失败：返回结果异常。", "#F87171")
+            self._set_status("失败", COLOR_YELLOW)
+            self._append_message("识别失败：返回结果异常。", COLOR_YELLOW)
             self._run_pending_capture_if_needed()
             return
 
@@ -848,9 +861,9 @@ class OverlayWindow(ctk.CTk):
 
         if trans_results:
             self.update_translation_list(trans_results)
-            self._set_status("完成", "#34D399")
+            self._set_status("完成", COLOR_YELLOW)
         else:
-            self._set_status("无结果", "#F59E0B")
+            self._set_status("无结果", COLOR_YELLOW)
             self._render_ocr_fallback(ocr_results)
 
         if self._locked:
@@ -868,7 +881,7 @@ class OverlayWindow(ctk.CTk):
     def _insert_colored_text(
         self,
         text: str,
-        color: str = "#E2E8F0",
+        color: str = COLOR_PAPER,
         bold: bool = False,
         newline: bool = True,
     ) -> None:
@@ -891,7 +904,7 @@ class OverlayWindow(ctk.CTk):
         self._show_list_view()
         self.result_view.delete("1.0", "end")
         for item in results:
-            color = "#E2E8F0"
+            color = COLOR_PAPER
             label = "Unknown"
             if item.color_tag is not None:
                 color = item.color_tag.hex_color
@@ -914,11 +927,11 @@ class OverlayWindow(ctk.CTk):
 
         unique = list(dict.fromkeys(messages))
         if len(unique) == 1:
-            self._insert_colored_text(unique[0], color="#F59E0B")
+            self._insert_colored_text(unique[0], color=COLOR_YELLOW)
             if "GLM_API_KEY" in unique[0]:
                 self._insert_colored_text(
                     "编辑 local_api_keys.py 后重启程序。",
-                    color="#94A3B8",
+                    color=COLOR_MUTED,
                 )
             return
 
@@ -1006,7 +1019,7 @@ class OverlayWindow(ctk.CTk):
         else:
             self.mode_label.configure(text=f"编辑模式 · {text}", text_color=color)
 
-    def _append_message(self, text: str, color: str = "#E2E8F0") -> None:
+    def _append_message(self, text: str, color: str = COLOR_PAPER) -> None:
         safe = html.unescape(text)
         self._insert_colored_text(safe, color=color)
 
