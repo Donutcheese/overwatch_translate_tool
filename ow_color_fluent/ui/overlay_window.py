@@ -13,7 +13,13 @@ from typing import Any
 
 import customtkinter as ctk
 
-from ..core.config import GLM_API_KEY, TransResult
+from ..core.config import (
+    GLM_API_KEY,
+    INPLACE_OVERLAY,
+    PREFETCH_ENABLED,
+    PREFETCH_INTERVAL_MS,
+    TransResult,
+)
 from ..runtime.async_runtime import AsyncRuntime
 from ..services.api_client import OWColorFluentApiClient, capture_region_to_base64
 from .app_icon import apply_app_icon
@@ -117,6 +123,9 @@ class OverlayWindow(ctk.CTk):
         self._glass_hide_job: str | None = None
         self._glass_dismiss_bound = False
         self._acrylic_after_job: str | None = None
+        self._prefetch_job: str | None = None
+        self._inplace_labels: list[Any] = []
+        self._inplace_layer: ctk.CTkFrame | None = None
 
         self.title("OW-Color-Fluent-Translator")
         self.overrideredirect(True)
@@ -146,6 +155,9 @@ class OverlayWindow(ctk.CTk):
             self._insert_colored_text("示例：GLM_API_KEY = \"你的智谱Key\"", color="#94A3B8")
         else:
             self._insert_colored_text("F8 识别 · F9 锁定后游戏中透明", color="#94A3B8")
+
+        # 后台预热 DeepSeek 指令前缀缓存，降低首次翻译 TTFT
+        self._runtime.submit(self._api_client.warm_translation_prefix())
 
     def _get_screen_size(self) -> tuple[int, int]:
         if sys.platform.startswith("win"):
@@ -362,6 +374,11 @@ class OverlayWindow(ctk.CTk):
         )
         self.result_view.grid(row=2, column=0, sticky="nsew", padx=8, pady=(0, 2))
 
+        # 原位覆盖层：与 result_view 同格，按 bbox 放置译文
+        self._inplace_layer = ctk.CTkFrame(self.card, fg_color="transparent")
+        self._inplace_layer.grid(row=2, column=0, sticky="nsew", padx=8, pady=(0, 2))
+        self._inplace_layer.lower(self.result_view)
+
         self.footer = ctk.CTkFrame(self.card, fg_color="transparent", height=self._scaled_px(18))
         self.footer.grid(row=3, column=0, sticky="ew", padx=4, pady=(0, 2))
         self.footer.grid_columnconfigure(0, weight=1)
@@ -551,6 +568,9 @@ class OverlayWindow(ctk.CTk):
         self.header.grid(row=0, column=0, sticky="ew", padx=4, pady=(4, 0))
         self.region_label.grid(row=1, column=0, sticky="ew", padx=8, pady=(4, 2))
         self.result_view.grid(row=2, column=0, sticky="nsew", padx=8, pady=(0, 2))
+        if self._inplace_layer is not None:
+            self._inplace_layer.grid(row=2, column=0, sticky="nsew", padx=8, pady=(0, 2))
+            self._inplace_layer.lower(self.result_view)
         if not self._locked:
             self.footer.grid(row=3, column=0, sticky="ew", padx=4, pady=(0, 2))
 
@@ -600,6 +620,7 @@ class OverlayWindow(ctk.CTk):
                 border_width=1,
                 border_color="#475569",
             )
+            self._show_list_view()
             self._show_setup_widgets()
             self._set_click_through(False)
             self._refresh_font_scale_from_window()
@@ -624,6 +645,9 @@ class OverlayWindow(ctk.CTk):
             )
             self._hide_setup_widgets()
             self.result_view.grid(row=0, column=0, sticky="nsew", padx=12, pady=12)
+            if self._inplace_layer is not None:
+                self._inplace_layer.grid(row=0, column=0, sticky="nsew", padx=12, pady=12)
+                self._inplace_layer.lower(self.result_view)
             self.card.grid_rowconfigure(0, weight=1)
             self._set_click_through(False)
             self._bind_glass_dismiss_events()
@@ -697,9 +721,109 @@ class OverlayWindow(ctk.CTk):
     ) -> dict[str, Any]:
         capture_data = await asyncio.to_thread(capture_region_to_base64, region)
         self.after(0, self._show_capture_progress, restore_after_capture)
-        ocr_results = await self._api_client.process_multi_channel_ocr(capture_data)
+
+        # 优先复用锁定态后台预取的新鲜 OCR，跳过一次网络往返
+        ocr_results = self._api_client.take_prefetch_ocr_if_fresh(max_age_sec=1.2)
+        if ocr_results is None:
+            ocr_results = await self._api_client.process_multi_channel_ocr(capture_data)
+        else:
+            # 预取命中时仍异步刷新下一次预取指纹
+            self._api_client.remember_prefetch_ocr(ocr_results)
+
         trans_results = await self._api_client.translate_ocr_results(ocr_results)
         return {"ocr": ocr_results, "trans": trans_results}
+
+    async def _prefetch_ocr_once(self, region: dict[str, int]) -> None:
+        capture_data = await asyncio.to_thread(capture_region_to_base64, region)
+        ocr_results = await self._api_client.process_multi_channel_ocr(capture_data)
+        self._api_client.remember_prefetch_ocr(ocr_results)
+        # 预翻译：词典/记忆命中可提前写入，F8 时几乎瞬时
+        await self._api_client.translate_ocr_results(ocr_results)
+
+    def _schedule_prefetch(self) -> None:
+        self._cancel_prefetch()
+        if not PREFETCH_ENABLED or not self._locked or self._closing:
+            return
+        self._prefetch_job = self.after(PREFETCH_INTERVAL_MS, self._run_prefetch_tick)
+
+    def _cancel_prefetch(self) -> None:
+        if self._prefetch_job is not None:
+            try:
+                self.after_cancel(self._prefetch_job)
+            except Exception:
+                pass
+            self._prefetch_job = None
+
+    def _run_prefetch_tick(self) -> None:
+        self._prefetch_job = None
+        if not PREFETCH_ENABLED or not self._locked or self._closing or self._busy:
+            self._schedule_prefetch()
+            return
+        region = self._current_capture_region()
+        future = self._runtime.submit(self._prefetch_ocr_once(region))
+
+        def _done(fut: Future) -> None:
+            try:
+                fut.result()
+            except Exception:
+                pass
+            if not self._closing:
+                self.after(0, self._schedule_prefetch)
+
+        future.add_done_callback(_done)
+
+    def _clear_inplace_labels(self) -> None:
+        for label in self._inplace_labels:
+            try:
+                label.destroy()
+            except Exception:
+                pass
+        self._inplace_labels.clear()
+
+    def _show_list_view(self) -> None:
+        self._clear_inplace_labels()
+        if self._inplace_layer is not None:
+            self._inplace_layer.grid_remove()
+        self.result_view.grid()
+
+    def _render_inplace_overlay(self, results: list[TransResult]) -> bool:
+        """按 bbox 原位覆盖；成功返回 True，否则回退列表渲染。"""
+        if not INPLACE_OVERLAY or self._inplace_layer is None:
+            return False
+        placed = [item for item in results if item.bbox is not None and item.translated.strip()]
+        if not placed:
+            return False
+
+        self.result_view.grid_remove()
+        self._inplace_layer.grid()
+        self._clear_inplace_labels()
+        self.update_idletasks()
+        layer_w = max(1, int(self._inplace_layer.winfo_width()))
+        layer_h = max(1, int(self._inplace_layer.winfo_height()))
+
+        for item in placed:
+            assert item.bbox is not None
+            x0, y0, x1, y1 = item.bbox
+            px = int(x0 * layer_w)
+            py = int(y0 * layer_h)
+            pw = max(self._scaled_px(48), int((x1 - x0) * layer_w))
+            ph = max(self._scaled_px(16), int((y1 - y0) * layer_h))
+            color = item.color_tag.hex_color if item.color_tag else "#E2E8F0"
+            text = html.unescape(item.translated.strip())
+            # 半透明底条盖住原文位置，配合窗口毛玻璃形成“模糊原语 + 中文覆盖”
+            label = ctk.CTkLabel(
+                self._inplace_layer,
+                text=text,
+                font=self._scaled_font(FONT_BASE_BODY, "bold"),
+                text_color=color,
+                fg_color="#101826",
+                corner_radius=4,
+                anchor="w",
+                justify="left",
+            )
+            label.place(x=px, y=py, width=pw, height=ph)
+            self._inplace_labels.append(label)
+        return True
 
     def _handle_pipeline_done(self, payload: object, error: str) -> None:
         self._busy = False
@@ -762,6 +886,9 @@ class OverlayWindow(ctk.CTk):
         self.result_view.see("end")
 
     def update_translation_list(self, results: list[TransResult]) -> None:
+        if self._render_inplace_overlay(results):
+            return
+        self._show_list_view()
         self.result_view.delete("1.0", "end")
         for item in results:
             color = "#E2E8F0"
@@ -774,6 +901,7 @@ class OverlayWindow(ctk.CTk):
             self._insert_colored_text(text, color=color, bold=False, newline=True)
 
     def _render_ocr_fallback(self, ocr_results: list[Any]) -> None:
+        self._show_list_view()
         self.result_view.delete("1.0", "end")
         if not ocr_results:
             self._insert_colored_text("无可用 OCR 结果。")
@@ -808,9 +936,12 @@ class OverlayWindow(ctk.CTk):
             self.mode_label.configure(text="锁定穿透")
             self.lock_btn.configure(text=f"解锁({HOTKEY_TOGGLE_LOCK.upper()})")
             self._set_visual_state("hidden")
+            self._schedule_prefetch()
         else:
             self.mode_label.configure(text="编辑模式")
             self.lock_btn.configure(text=f"锁定({HOTKEY_TOGGLE_LOCK.upper()})")
+            self._cancel_prefetch()
+            self._show_list_view()
             self._set_visual_state("setup")
         self._update_region_label()
 
@@ -894,6 +1025,9 @@ class OverlayWindow(ctk.CTk):
     def _on_close(self) -> None:
         self._closing = True
         self._capture_pending = False
+        self._cancel_prefetch()
+        self._cancel_glass_hide()
+        self._clear_inplace_labels()
         try:
             if keyboard is not None:
                 keyboard.unhook_all_hotkeys()
