@@ -1,60 +1,70 @@
 // OW 翻译工具技术路线
 digraph ow_translation_route {
-	bgcolor="#ffffff" fontcolor="#2a2a2a" fontname="Microsoft YaHei" fontsize=22 label="20 人并发 · 端到端 P95 ≤ 2s" labelloc=t nodesep=0.35 pad=0.30 rankdir=LR ranksep=0.55 splines=polyline
-	node [color="#2a2a2a" fillcolor="#f4c320" fontcolor="#2a2a2a" fontname="Microsoft YaHei" fontsize=12 margin="0.14,0.10" penwidth=1.6 shape=box style="rounded,filled"]
-	edge [arrowsize=0.75 color="#2a2a2a" fontcolor="#2a2a2a" fontname="Microsoft YaHei" fontsize=10 penwidth=1.6]
+	bgcolor="#ffffff" compound=true dpi=180 fontcolor="#2a2a2a" fontname="Microsoft YaHei" fontsize=24 label="20 人并发 · 端到端 P95 ≤ 2s" labelloc=t newrank=true nodesep=0.30 pad=0.35 rankdir=TB ranksep=0.62 splines=ortho
+	node [color="#2a2a2a" fillcolor="#f4c320" fontcolor="#2a2a2a" fontname="Microsoft YaHei" fontsize=11 margin="0.16,0.12" penwidth=1.8 shape=box style="rounded,filled"]
+	edge [arrowsize=0.75 color="#2a2a2a" fontcolor="#2a2a2a" fontname="Microsoft YaHei" fontsize=9 penwidth=1.8]
 	subgraph cluster_client {
-		bgcolor="#ffffff" color="#2a2a2a" fontcolor="#2a2a2a" label="客户端（20 实例，本地分摊 OCR）" penwidth=2 style=rounded
-		capture [label="截图 + 立即模糊
-≤ 50ms"]
-		hash [label="感知哈希
-画面是否变化？" fillcolor="#ffffff" shape=diamond]
-		ocr [label="本地 PP-OCRv5 Mobile
-文本 + bbox · P95 ≤ 450ms"]
-		confidence [label="OCR 置信度
-≥ 0.90？" fillcolor="#ffffff" shape=diamond]
-		classify [label="bbox 颜色采样
+		bgcolor="#ffffff" color="#2a2a2a" fontcolor="#2a2a2a" label="客户端本地链路 · 每个用户独立执行" margin=18 penwidth=2 style=rounded
+		{
+			rank=same
+			users [label="20 个并发客户端
+同步突发触发" fillcolor="#2a2a2a" fontcolor="#ffffff"]
+			capture [label="01  截图 + 立即模糊
+预算 ≤ 50ms"]
+			delta [label="02  感知哈希 + 行差异
+未变化：复用可信结果" fillcolor="#ffffff"]
+			ocr [label="03  本地 PP-OCRv5
+文本 + bbox
+P95 ≤ 450ms"]
+			quality [label="04  OCR 质量门控
+置信度 ≥ 0.90" fillcolor="#ffffff"]
+			classify [label="05  bbox 颜色采样
 频道分类 + 新增行提取"]
-		local_cache [label="本地词典 / SQLite
-热路径 < 10ms" fillcolor="#2a2a2a" fontcolor="#ffffff"]
-		render [label="原位覆盖译文
-端到端 P95 ≤ 2s" fillcolor="#2a2a2a" fontcolor="#ffffff"]
+		}
+		users -> capture
+		capture -> delta
+		delta -> ocr
+		ocr -> quality
+		quality -> classify
 	}
 	subgraph cluster_gateway {
-		bgcolor="#ffffff" color="#2a2a2a" fontcolor="#2a2a2a" label="中心翻译网关" penwidth=2 style=rounded
-		gateway [label="FastAPI
-认证 · 限流 · 100ms deadline"]
-		redis [label="Redis 全局缓存
+		bgcolor="#ffffff" color="#2a2a2a" fontcolor="#2a2a2a" label="缓存与中心翻译链路 · 仅发送新增文本" margin=18 penwidth=2 style=rounded
+		{
+			rank=same
+			local_cache [label="06  本地词典 / SQLite
+命中即返回 < 10ms" fillcolor="#2a2a2a" fontcolor="#ffffff"]
+			api [label="07  FastAPI 网关
+认证 · 限流 · Deadline"]
+			redis [label="08  Redis 全局缓存
 请求合并 < 10ms" fillcolor="#2a2a2a" fontcolor="#ffffff"]
-		gpu [label="GPU 本地翻译
+			gpu [label="09  GPU 本地翻译
 动态批处理 ≤ 20
 P95 ≤ 650ms"]
+			render [label="10  原位覆盖译文
+端到端 P95 ≤ 2s" fillcolor="#2a2a2a" fontcolor="#ffffff"]
+		}
+		local_cache -> api
+		api -> redis
+		redis -> gpu
+		gpu -> render
 	}
-	subgraph cluster_fallback {
-		bgcolor="#ffffff" color="#2a2a2a" fontcolor="#2a2a2a" label="非关键路径回退" penwidth=1.6 style="rounded,dashed"
-		glm [label="GLM-OCR 回退
-硬超时 700ms" fillcolor="#ffffff"]
-		deepseek [label="DeepSeek V4 Flash
-异步纠错 · thinking=disabled" fillcolor="#ffffff"]
+	subgraph cluster_guardrail {
+		bgcolor="#ffffff" color="#2a2a2a" fontcolor="#2a2a2a" label="质量回退与可观测性 · 不阻塞首屏" margin=16 penwidth=1.6 style="rounded,dashed"
+		{
+			rank=same
+			glm [label="OCR 低置信度
+GLM-OCR 回退 ≤ 700ms
+成功后进入步骤 05" fillcolor="#ffffff"]
+			metrics [label="Prometheus / Grafana
+P50 · P95 · P99
+429 · CER · bbox IoU" fillcolor="#2a2a2a" fontcolor="#ffffff"]
+			deepseek [label="翻译低置信度
+DeepSeek V4 Flash 异步纠错
+下一帧修正 · thinking=disabled" fillcolor="#ffffff"]
+		}
 	}
-	metrics [label="Prometheus / Grafana
-P50 · P95 · P99 · 429 · 准确率" fillcolor="#2a2a2a" fontcolor="#ffffff"]
-	capture -> hash
-	hash -> render [label="未变化 / 缓存命中"]
-	hash -> ocr [label="变化"]
-	ocr -> confidence
-	confidence -> classify [label="是"]
-	confidence -> glm [label="否"]
-	glm -> classify [label="成功"]
-	classify -> local_cache
-	local_cache -> render [label="命中"]
-	local_cache -> gateway [label="未命中"]
-	gateway -> redis
-	redis -> render [label="命中"]
-	redis -> gpu [label="未命中"]
-	gpu -> render [label="首屏结果"]
-	gpu -> deepseek [label="低置信度"]
-	deepseek -> render [label="后台修正" style=dashed]
-	gateway -> metrics [style=dashed]
-	ocr -> metrics [style=dashed]
+	classify -> local_cache [lhead=cluster_gateway ltail=cluster_client]
+	quality -> glm [constraint=false style=dashed]
+	api -> metrics [style=dashed]
+	render -> deepseek [style=dashed]
 }
