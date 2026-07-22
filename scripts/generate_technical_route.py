@@ -15,74 +15,75 @@ def build_graph() -> Digraph:
     graph.attr(
         rankdir="TB",
         bgcolor=WHITE,
-        pad="0.35",
-        nodesep="0.30",
-        ranksep="0.62",
+        pad="0.28",
+        nodesep="0.24",
+        ranksep="0.48",
         splines="ortho",
         newrank="true",
         compound="true",
         dpi="180",
+        outputorder="edgesfirst",
         fontname="Microsoft YaHei",
-        label="20 人并发 · 端到端 P95 ≤ 2s",
+        label="OW REAL-TIME TRANSLATION  /  20 CONCURRENT  /  P95 ≤ 2s",
         labelloc="t",
-        fontsize="24",
+        fontsize="18",
         fontcolor=BLACK,
     )
     graph.attr(
         "node",
         shape="box",
         style="rounded,filled",
+        fixedsize="true",
+        width="2.12",
+        height="0.88",
         color=BLACK,
         fillcolor=YELLOW,
         fontcolor=BLACK,
         fontname="Microsoft YaHei",
-        fontsize="11",
-        margin="0.16,0.12",
-        penwidth="1.8",
+        fontsize="10",
+        margin="0.12,0.08",
+        penwidth="1.5",
     )
     graph.attr(
         "edge",
         color=BLACK,
-        fontcolor=BLACK,
-        fontname="Microsoft YaHei",
-        fontsize="9",
-        penwidth="1.8",
-        arrowsize="0.75",
+        penwidth="1.5",
+        arrowsize="0.68",
     )
 
     with graph.subgraph(name="cluster_client") as client:
         client.attr(
-            label="客户端本地链路 · 每个用户独立执行",
+            label="A  /  CLIENT LOCAL PIPELINE  /  客户端本地感知",
+            labeljust="l",
+            fontsize="12",
             color=BLACK,
             bgcolor=WHITE,
             fontcolor=BLACK,
             style="rounded",
-            penwidth="2",
-            margin="18",
+            penwidth="1.2",
+            margin="14",
         )
         with client.subgraph() as client_row:
             client_row.attr(rank="same")
             client_row.node(
-                "users",
-                "20 个并发客户端\n同步突发触发",
+                "capture",
+                "01  CAPTURE\n截图并立即模糊\n≤ 50ms",
                 fillcolor=BLACK,
                 fontcolor=WHITE,
             )
-            client_row.node("capture", "01  截图 + 立即模糊\n预算 ≤ 50ms")
             client_row.node(
                 "delta",
-                "02  感知哈希 + 行差异\n未变化：复用可信结果",
+                "02  DELTA\n感知哈希 + 行差异\n未变化则直接复用",
                 fillcolor=WHITE,
             )
-            client_row.node("ocr", "03  本地 PP-OCRv5\n文本 + bbox\nP95 ≤ 450ms")
+            client_row.node("ocr", "03  LOCAL OCR\nPP-OCRv5 + bbox\nP95 ≤ 450ms")
             client_row.node(
                 "quality",
-                "04  OCR 质量门控\n置信度 ≥ 0.90",
+                "04  QUALITY GATE\n置信度 ≥ 0.90\n低分进入 OCR 回退",
                 fillcolor=WHITE,
             )
-            client_row.node("classify", "05  bbox 颜色采样\n频道分类 + 新增行提取")
+            client_row.node("classify", "05  EXTRACT\nbbox 颜色采样\n频道分类 + 新增行")
 
-        client.edge("users", "capture")
         client.edge("capture", "delta")
         client.edge("delta", "ocr")
         client.edge("ocr", "quality")
@@ -90,75 +91,91 @@ def build_graph() -> Digraph:
 
     with graph.subgraph(name="cluster_gateway") as gateway:
         gateway.attr(
-            label="缓存与中心翻译链路 · 仅发送新增文本",
+            label="B  /  CACHE & TRANSLATE  /  缓存与中心翻译",
+            labeljust="l",
+            fontsize="12",
             color=BLACK,
             bgcolor=WHITE,
             fontcolor=BLACK,
             style="rounded",
-            penwidth="2",
-            margin="18",
+            penwidth="1.2",
+            margin="14",
         )
         with gateway.subgraph() as gateway_row:
             gateway_row.attr(rank="same")
             gateway_row.node(
-                "local_cache",
-                "06  本地词典 / SQLite\n命中即返回 < 10ms",
+                "render",
+                "10  OVERLAY\n原位覆盖译文\n端到端 P95 ≤ 2s",
                 fillcolor=BLACK,
                 fontcolor=WHITE,
             )
-            gateway_row.node("api", "07  FastAPI 网关\n认证 · 限流 · Deadline")
+            gateway_row.node("gpu", "09  GPU TRANSLATE\n动态批处理 ≤ 20\nP95 ≤ 650ms")
             gateway_row.node(
                 "redis",
-                "08  Redis 全局缓存\n请求合并 < 10ms",
+                "08  REDIS\n全局缓存 + 请求合并\n< 10ms",
                 fillcolor=BLACK,
                 fontcolor=WHITE,
             )
-            gateway_row.node("gpu", "09  GPU 本地翻译\n动态批处理 ≤ 20\nP95 ≤ 650ms")
+            gateway_row.node("api", "07  API GATEWAY\n认证 + 限流\nDeadline 传播")
             gateway_row.node(
-                "render",
-                "10  原位覆盖译文\n端到端 P95 ≤ 2s",
+                "local_cache",
+                "06  LOCAL CACHE\n词典 + SQLite\n命中即返回 < 10ms",
                 fillcolor=BLACK,
                 fontcolor=WHITE,
             )
 
-        gateway.edge("local_cache", "api")
-        gateway.edge("api", "redis")
-        gateway.edge("redis", "gpu")
-        gateway.edge("gpu", "render")
+        gateway.edge("render", "gpu", style="invis", weight="100")
+        gateway.edge("gpu", "redis", style="invis", weight="100")
+        gateway.edge("redis", "api", style="invis", weight="100")
+        gateway.edge("api", "local_cache", style="invis", weight="100")
+        gateway.edge("local_cache", "api", constraint="false")
+        gateway.edge("api", "redis", constraint="false")
+        gateway.edge("redis", "gpu", constraint="false")
+        gateway.edge("gpu", "render", constraint="false")
 
     with graph.subgraph(name="cluster_guardrail") as guardrail:
         guardrail.attr(
-            label="质量回退与可观测性 · 不阻塞首屏",
+            label="C  /  GUARDRAILS  /  回退与可观测性（不阻塞首屏）",
+            labeljust="l",
+            fontsize="11",
             color=BLACK,
             bgcolor=WHITE,
             fontcolor=BLACK,
-            style="rounded,dashed",
-            penwidth="1.6",
-            margin="16",
+            style="rounded",
+            penwidth="1.2",
+            margin="14",
         )
         with guardrail.subgraph() as guardrail_row:
             guardrail_row.attr(rank="same")
             guardrail_row.node(
                 "glm",
-                "OCR 低置信度\nGLM-OCR 回退 ≤ 700ms\n成功后进入步骤 05",
+                "FROM 04  /  OCR FALLBACK\nGLM-OCR ≤ 700ms\n成功后进入步骤 05",
                 fillcolor=WHITE,
+                width="3.68",
             )
             guardrail_row.node(
                 "metrics",
-                "Prometheus / Grafana\nP50 · P95 · P99\n429 · CER · bbox IoU",
+                "FROM 07  /  OBSERVE\nP50 · P95 · P99 · 429\nCER · bbox IoU",
                 fillcolor=BLACK,
                 fontcolor=WHITE,
+                width="3.68",
             )
             guardrail_row.node(
                 "deepseek",
-                "翻译低置信度\nDeepSeek V4 Flash 异步纠错\n下一帧修正 · thinking=disabled",
+                "FROM 10  /  ASYNC REFINE\nDeepSeek V4 Flash\n下一帧修正 · thinking off",
                 fillcolor=WHITE,
+                width="3.68",
             )
 
-    graph.edge("classify", "local_cache", ltail="cluster_client", lhead="cluster_gateway")
-    graph.edge("quality", "glm", style="dashed", constraint="false")
-    graph.edge("api", "metrics", style="dashed")
-    graph.edge("render", "deepseek", style="dashed")
+    graph.edge(
+        "classify",
+        "local_cache",
+        tailport="s",
+        headport="n",
+        ltail="cluster_client",
+        lhead="cluster_gateway",
+    )
+    graph.edge("render", "glm", style="invis", weight="100")
     return graph
 
 
