@@ -92,20 +92,31 @@
 
 ### 性能与稳定性调优
 
-实时查看翻译时，优先减少 OCR 请求数与窗口状态切换耗时。可在 `.env` 中覆盖：
+目标：**F8 后约 1s 内**在毛玻璃层覆盖原聊天位置显示中文。冷启动双 API（GLM-OCR → DeepSeek）很难稳定压到 1s，因此采用**混合快路径**：
+
+| 层级 | 机制 | 预期耗时 |
+|------|------|----------|
+| L0 本地词典 | `phrase_cache.OW_PHRASE_DICT` 命中 `힐좀`/`C9` 等 | <5ms |
+| L1 行级记忆 | LRU 翻译记忆，重复句子不再调 LLM | <5ms |
+| L2 指令前缀预热 | 启动时 `warm_translation_prefix()`，命中 DeepSeek Context Cache | 降 TTFT |
+| L3 锁定态预取 | F9 后后台周期 OCR+预翻译，F8 复用 ≤1.2s 内结果 | 热路径可跳过 OCR |
+| L4 模型 | 默认 `deepseek-v4-flash` + `thinking.disabled`，限制 `max_tokens` | 缩短生成 |
 
 ```mermaid
 flowchart LR
-    A["F8 触发"] --> B["透明态立即截图"]
-    B --> C["并发 OCR: 友方/组队/提示"]
-    C --> D{"翻译缓存命中?"}
-    D -- "是" --> E["直接显示译文"]
-    D -- "否" --> F["LLM 本地化翻译"]
-    F --> G["写入缓存"]
-    G --> E
-    E --> H["玻璃浮层显示"]
-    H --> I["自动隐藏/等待下次 F8"]
+    A["F8 触发"] --> B{"预取 OCR 新鲜?"}
+    B -- "是" --> C["复用预取 OCR"]
+    B -- "否" --> D["并发 GLM-OCR"]
+    C --> E["行级: 词典/记忆"]
+    D --> E
+    E --> F{"仍有未命中行?"}
+    F -- "否" --> G["原位覆盖/列表渲染"]
+    F -- "是" --> H["DeepSeek Flash 非思考"]
+    H --> G
+    G --> I["毛玻璃 + bbox 覆盖原文"]
 ```
+
+可在 `.env` 中覆盖：
 
 ```env
 # 默认只识别友方/组队/系统提示，跳过通常没有聊天文字的 Enemy 红色通道
@@ -119,9 +130,21 @@ CAPTURE_HIDE_DELAY_MS=35
 
 # API 超时；实时翻译建议保持较短，避免一次慢请求拖住热键
 HTTP_TIMEOUT_SEC=18
+
+# 翻译模型：建议 deepseek-v4-flash，并关闭 thinking（默认已关）
+DEEPSEEK_MODEL=deepseek-v4-flash
+DEEPSEEK_THINKING_DISABLED=1
+DEEPSEEK_MAX_TOKENS=256
+
+# 锁定态后台预取；原位覆盖（需 OCR 返回 bbox）
+PREFETCH_ENABLED=1
+PREFETCH_INTERVAL_MS=800
+INPLACE_OVERLAY=1
 ```
 
-F8 连按时，程序会记录一次“待刷新”请求，当前识别结束后自动抓取最新画面；重复文字会命中内存翻译缓存，减少同一段聊天反复请求翻译模型。
+**为何不推荐“换 skill / 单靠更强模型”：** GLM-OCR Agent Skill 面向文档解析 Agent，不是局内字幕时延优化。双跳 API 的物理下限是两次 RTT；要稳定 <1s，必须砍掉一跳（预取/本地 OCR）或把第二跳变成词典命中。
+
+F8 连按时，程序会记录一次“待刷新”请求，当前识别结束后自动抓取最新画面；重复文字会命中行级记忆与整包缓存，减少同一段聊天反复请求翻译模型。
 
 
 
@@ -136,9 +159,10 @@ overwatch_translate_tool/
 │   │   ├── config.py  # DTO、颜色语义、环境变量
 │   │   └── prompts.py # OCR/翻译 Prompt 策略
 │   ├── services/
-│   │   └── api_client.py   # 多通道 OCR + 翻译客户端
+│   │   ├── api_client.py   # 多通道 OCR + 混合快路径翻译
+│   │   └── phrase_cache.py # 俚语词典 + 行级 LRU 翻译记忆
 │   ├── ui/
-│   │   └── overlay_window.py # 悬浮窗 GUI 与交互逻辑
+│   │   └── overlay_window.py # 悬浮窗 GUI、预取与原位覆盖
 │   └── runtime/
 │       └── async_runtime.py  # asyncio 后台循环线程
 ├── api_client.py      # 兼容导出层（转发到 package）
@@ -197,7 +221,7 @@ overwatch_translate_tool/
 | 热键 | [keyboard](https://github.com/boppreh/keyboard) | `>=0.13.5` | 全局快捷键（截图、锁定切换等） |
 | 配置 | [python-dotenv](https://github.com/theskumar/python-dotenv) | `>=1.0` | 读取 `.env` 中的 URL、超时等可选配置 |
 | OCR API | 智谱 **GLM-OCR** (`glm-ocr`) | — | 多通道掩码图文字识别 |
-| 翻译 API | **DeepSeek Chat** (`deepseek-chat`) | — | OW 亚服俚语 → 中文竞技术语 |
+| 翻译 API | **DeepSeek V4 Flash** (`deepseek-v4-flash`，非思考) | — | OW 亚服俚语 → 中文竞技术语；指令前缀可命中 Context Cache |
 
 #### 快速开始
 
